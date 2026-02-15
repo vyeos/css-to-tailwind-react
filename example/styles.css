@@ -1,0 +1,38 @@
+/* External CSS file - these classes will be converted */
+
+.main-head {
+  font-weight: bold;
+  text-align: center;
+  margin-bottom: 20px;
+  color: #111827;
+}
+
+.container {
+  max-width: 1200px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* This will be skipped - pseudo-selector */
+.btn:hover {
+  background-color: blue;
+}
+
+/* This will be skipped - media query */
+@media (min-width: 768px) {
+  .responsive {
+    display: flex;
+  }
+}
+
+/* This will be converted */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  background-color: white;
+  border-radius: 8px;
+}
