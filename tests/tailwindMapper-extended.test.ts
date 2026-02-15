@@ -748,4 +748,39 @@ describe('TailwindMapper', () => {
       expect(result.classes).toContain('border-red');
     });
   });
+
+  describe('background shorthand', () => {
+    it('should convert background with hex color', () => {
+      const result = mapper.convertProperty('background', '#ff0000');
+      expect(result.className).toBe('bg-[#ff0000]');
+    });
+
+    it('should convert background with named color', () => {
+      const result = mapper.convertProperty('background', 'red');
+      expect(result.className).toBe('bg-red-500');
+    });
+
+    it('should convert background: transparent', () => {
+      const result = mapper.convertProperty('background', 'transparent');
+      expect(result.className).toBe('bg-transparent');
+    });
+
+    it('should extract color from complex background shorthand', () => {
+      const result = mapper.convertPropertyWithMultiple('background', '#fff url(image.png) no-repeat center');
+      expect(result.classes).toContain('bg-[#fff]');
+    });
+
+    it('should handle background with rgb color', () => {
+      const result = mapper.convertProperty('background', 'rgb(255, 0, 0)');
+      expect(result.className).toBe('bg-[rgb(255, 0, 0)]');
+    });
+  });
+
+  describe('CSS variables', () => {
+    it('should skip CSS variable declarations', () => {
+      const result = mapper.convertProperty('--primary-color', '#ff0000');
+      expect(result.skipped).toBe(true);
+      expect(result.reason).toContain('CSS variable declaration');
+    });
+  });
 });

@@ -1,6 +1,7 @@
 const PROPERTY_PREFIX_MAP: Record<string, string[]> = {
   'color': ['text-'],
   'background-color': ['bg-'],
+  'background': ['bg-'],
   'font-size': ['text-xs', 'text-sm', 'text-base', 'text-lg', 'text-xl', 'text-2xl', 'text-3xl', 'text-4xl', 'text-5xl', 'text-6xl', 'text-7xl', 'text-8xl', 'text-9xl', 'text-'],
   'font-weight': ['font-thin', 'font-extralight', 'font-light', 'font-normal', 'font-medium', 'font-semibold', 'font-bold', 'font-extrabold', 'font-black'],
   'display': ['block', 'inline-block', 'inline', 'flex', 'inline-flex', 'grid', 'inline-grid', 'hidden', 'contents', 'table', 'table-cell', 'table-row', 'flow-root'],
@@ -350,7 +351,7 @@ export const PROPERTY_CONFLICT_GROUPS: Record<string, string[]> = {
   'font-size': ['font-size'],
   'font-weight': ['font-weight'],
   'color': ['color'],
-  'background-color': ['background-color'],
+  'background-color': ['background-color', 'background'],
   'border-radius': ['border-radius'],
   'border-width': ['border-width', 'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width'],
   'border-color': ['border-color', 'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color'],

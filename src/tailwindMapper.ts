@@ -287,6 +287,10 @@ export class TailwindMapper {
 
     logger.verbose(`Converting: ${normalizedProp}: ${normalizedValue}`);
 
+    if (normalizedProp.startsWith('--')) {
+      return { className: null, skipped: true, reason: `CSS variable declaration: ${property}` };
+    }
+
     if (normalizedProp === 'display') {
       return this.convertDisplay(normalizedValue);
     }
@@ -361,6 +365,14 @@ export class TailwindMapper {
       return this.convertBackgroundColor(normalizedValue);
     }
 
+    if (normalizedProp === 'background') {
+      const result = this.convertBackgroundShorthand(normalizedValue);
+      if (result.classes.length > 0) {
+        return { className: result.classes[0], skipped: false };
+      }
+      return { className: null, skipped: true, reason: result.warnings[0] || `Could not convert background: ${normalizedValue}` };
+    }
+
     if (normalizedProp === 'color') {
       return this.convertTextColor(normalizedValue);
     }
@@ -429,12 +441,127 @@ export class TailwindMapper {
       return this.convertFlexShorthand(normalizedValue);
     }
 
+    if (normalizedProp === 'background') {
+      return this.convertBackgroundShorthand(normalizedValue);
+    }
+
     const result = this.convertProperty(property, value);
     return {
       classes: result.className ? [result.className] : [],
       warnings: result.reason ? [result.reason] : [],
       cssProperties: result.className ? [property] : []
     };
+  }
+
+  private convertBackgroundShorthand(value: string): MultiConversionResult {
+    const classes: string[] = [];
+    const warnings: string[] = [];
+    const cssProperties: string[] = [];
+
+    if (value === 'transparent') {
+      classes.push('bg-transparent');
+      cssProperties.push('background-color');
+      return { classes, warnings, cssProperties };
+    }
+
+    if (value === 'none') {
+      classes.push('bg-none');
+      cssProperties.push('background-image');
+      return { classes, warnings, cssProperties };
+    }
+
+    const colorValue = this.extractColorFromBackground(value);
+    
+    if (colorValue) {
+      if (colorValue.startsWith('#')) {
+        classes.push(`bg-[${colorValue}]`);
+      } else if (colorValue.startsWith('rgb')) {
+        classes.push(`bg-[${colorValue}]`);
+      } else if (colorValue.startsWith('hsl')) {
+        classes.push(`bg-[${colorValue}]`);
+      } else {
+        const colorMap: Record<string, string> = {
+          'white': 'bg-white',
+          'black': 'bg-black',
+          'red': 'bg-red-500',
+          'blue': 'bg-blue-500',
+          'green': 'bg-green-500',
+          'gray': 'bg-gray-500',
+          'transparent': 'bg-transparent'
+        };
+        
+        if (colorMap[colorValue]) {
+          classes.push(colorMap[colorValue]);
+        } else {
+          classes.push(`bg-${colorValue}`);
+        }
+      }
+      cssProperties.push('background-color');
+    } else {
+      warnings.push(`Cannot extract color from background shorthand: ${value}`);
+    }
+
+    return { classes, warnings, cssProperties };
+  }
+
+  private extractColorFromBackground(value: string): string | null {
+    const tokens = this.tokenizeValue(value);
+    
+    for (const token of tokens) {
+      if (token.startsWith('#')) {
+        return token;
+      }
+      
+      if (token.startsWith('rgb') || token.startsWith('hsl')) {
+        return token;
+      }
+      
+      if (token.startsWith('url(') || token === 'none') {
+        continue;
+      }
+      
+      if (/^(linear-gradient|radial-gradient|conic-gradient|repeating-linear-gradient|repeating-radial-gradient|repeating-conic-gradient)\(/i.test(token)) {
+        continue;
+      }
+      
+      if (/^(repeat|no-repeat|repeat-x|repeat-y|space|round)$/i.test(token)) {
+        continue;
+      }
+      
+      if (/^(scroll|fixed|local)$/i.test(token)) {
+        continue;
+      }
+      
+      if (/^(center|top|bottom|left|right|\d+%|\d+px)/i.test(token)) {
+        continue;
+      }
+      
+      if (/^(cover|contain)$/i.test(token)) {
+        continue;
+      }
+      
+      if (/^(border-box|padding-box|content-box)$/i.test(token)) {
+        continue;
+      }
+      
+      if (/^(clip|border|padding|content)$/i.test(token)) {
+        continue;
+      }
+      
+      if (/^\d/.test(token) && !token.includes('gradient')) {
+        continue;
+      }
+      
+      if (/^(transparent|white|black|red|blue|green|yellow|orange|purple|pink|gray|grey|brown|cyan|magenta|olive|lime|aqua|navy|teal|maroon|silver|fuchsia)$/i.test(token)) {
+        return token;
+      }
+      
+      if (/^(aliceblue|antiquewhite|aqua|aquamarine|azure|beige|bisque|blanchedalmond|blueviolet|burlywood|cadetblue|chartreuse|chocolate|coral|cornflowerblue|cornsilk|crimson|darkblue|darkcyan|darkgoldenrod|darkgray|darkgreen|darkgrey|darkkhaki|darkmagenta|darkolivegreen|darkorange|darkorchid|darkred|darksalmon|darkseagreen|darkslateblue|darkslategray|darkslategrey|darkturquoise|darkviolet|deeppink|deepskyblue|dimgray|dimgrey|dodgerblue|firebrick|floralwhite|forestgreen|gainsboro|ghostwhite|gold|goldenrod|greenyellow|grey|honeydew|hotpink|indianred|indigo|ivory|khaki|lavender|lavenderblush|lawngreen|lemonchiffon|lightblue|lightcoral|lightcyan|lightgoldenrodyellow|lightgray|lightgreen|lightgrey|lightpink|lightsalmon|lightseagreen|lightskyblue|lightslategray|lightslategrey|lightsteelblue|lightyellow|limegreen|linen|mediumaquamarine|mediumblue|mediumorchid|mediumpurple|mediumseagreen|mediumslateblue|mediumspringgreen|mediumturquoise|mediumvioletred|midnightblue|mintcream|mistyrose|moccasin|navajowhite|oldlace|olivedrab|orangered|orchid|palegoldenrod|palegreen|paleturquoise|palevioletred|papayawhip|peachpuff|peru|plum|powderblue|rebeccapurple|rosybrown|royalblue|saddlebrown|salmon|sandybrown|seagreen|seashell|sienna|skyblue|slateblue|slategray|slategrey|snow|springgreen|steelblue|tan|thistle|tomato|turquoise|violet|wheat|whitesmoke|yellowgreen)$/i.test(token)) {
+        return token;
+      }
+    }
+    
+    return null;
   }
 
   private convertSpacingShorthand(prop: string, value: string): MultiConversionResult {
