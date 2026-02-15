@@ -301,12 +301,6 @@ export async function transformFiles(
     for (const [filePath, fileResult] of cssFileResults) {
       if (!fileResult.hasChanges) continue;
 
-      if (!fileResult.fullyConvertible) {
-        logger.warn(`⏭️  Skipping ${path.basename(filePath)} - not fully convertible (would break styles)`);
-        logger.warn(`   Convertible: ${fileResult.rules.filter(r => r.convertedClasses.length > 0).length}/${fileResult.rules.length} rules`);
-        continue;
-      }
-
       if (fileResult.canDelete && options.deleteCss) {
         const success = await fileWriter.deleteFile(filePath);
         if (success) {
@@ -315,10 +309,18 @@ export async function transformFiles(
         }
       } else if (fileResult.canDelete && !options.deleteCss) {
         logger.info(`ℹ️  ${path.basename(filePath)} is now empty (use --delete-css to remove)`);
+      } else if (fileResult.fullyConvertible) {
+        const success = await fileWriter.writeFile(filePath, fileResult.newContent, fileResult.content);
+        if (success) {
+          results.filesModified++;
+        }
       } else {
         const success = await fileWriter.writeFile(filePath, fileResult.newContent, fileResult.content);
         if (success) {
           results.filesModified++;
+          const convertedCount = fileResult.rules.filter(r => r.convertedClasses.length > 0).length;
+          const totalCount = fileResult.rules.length;
+          logger.info(`📝 ${path.basename(filePath)}: converted ${convertedCount}/${totalCount} rules (unconverted properties kept)`);
         }
       }
     }
