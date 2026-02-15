@@ -17,3 +17,24 @@ export {
   processMediaQuery,
   prefixWithBreakpoint
 } from './utils/breakpointResolver';
+export {
+  ParsedSelector,
+  PSEUDO_TO_VARIANT,
+  SUPPORTED_PSEUDOS,
+  parseSelector,
+  mapPseudoToVariant,
+  processPseudoSelector,
+  parseMultipleSelectors
+} from './utils/pseudoSelectorResolver';
+export {
+  VARIANT_ORDER,
+  isResponsiveVariant,
+  isPseudoVariant,
+  sortVariants,
+  deduplicateVariants,
+  normalizeVariantOrder,
+  assembleUtility,
+  assembleUtilities,
+  mergeUtilities,
+  MergedUtility
+} from './utils/variantAssembler';

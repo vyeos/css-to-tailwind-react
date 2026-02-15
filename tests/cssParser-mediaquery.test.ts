@@ -35,6 +35,18 @@ const DEFAULT_CONFIG: TailwindConfig = {
   }
 };
 
+function hasVariant(rule: CSSRule, variant: string): boolean {
+  return rule.utilities.some(u => u.variants.includes(variant));
+}
+
+function hasOnlyVariant(rule: CSSRule, variant: string): boolean {
+  return rule.utilities.every(u => u.variants.length === 1 && u.variants[0] === variant);
+}
+
+function hasNoVariants(rule: CSSRule): boolean {
+  return rule.utilities.every(u => u.variants.length === 0);
+}
+
 describe('CSSParser - Media Query Support', () => {
   let parser: CSSParser;
   let mapper: TailwindMapper;
@@ -60,7 +72,7 @@ describe('CSSParser - Media Query Support', () => {
       const rule = result.rules[0];
       
       expect(rule.className).toBe('box');
-      expect(rule.breakpoint).toBe('md');
+      expect(hasOnlyVariant(rule, 'md')).toBe(true);
       expect(rule.convertedClasses).toContain('md:flex');
       expect(rule.convertedClasses).toContain('md:m-4');
       expect(rule.fullyConverted).toBe(true);
@@ -78,7 +90,7 @@ describe('CSSParser - Media Query Support', () => {
       expect(result.rules).toHaveLength(1);
       const rule = result.rules[0];
       
-      expect(rule.breakpoint).toBe('sm');
+      expect(hasOnlyVariant(rule, 'sm')).toBe(true);
       expect(rule.convertedClasses).toContain('sm:block');
     });
 
@@ -95,7 +107,7 @@ describe('CSSParser - Media Query Support', () => {
       expect(result.rules).toHaveLength(1);
       const rule = result.rules[0];
       
-      expect(rule.breakpoint).toBe('lg');
+      expect(hasOnlyVariant(rule, 'lg')).toBe(true);
       expect(rule.convertedClasses).toContain('lg:flex');
       expect(rule.convertedClasses).toContain('lg:p-2');
     });
@@ -117,11 +129,11 @@ describe('CSSParser - Media Query Support', () => {
       expect(result.rules).toHaveLength(2);
       
       const boxRule = result.rules.find(r => r.className === 'box');
-      expect(boxRule?.breakpoint).toBe('md');
+      expect(hasOnlyVariant(boxRule!, 'md')).toBe(true);
       expect(boxRule?.convertedClasses).toContain('md:flex');
       
       const cardRule = result.rules.find(r => r.className === 'card');
-      expect(cardRule?.breakpoint).toBe('md');
+      expect(hasOnlyVariant(cardRule!, 'md')).toBe(true);
       expect(cardRule?.convertedClasses).toContain('md:m-2');
     });
 
@@ -141,7 +153,7 @@ describe('CSSParser - Media Query Support', () => {
       const result = await parser.parse(css, 'test.css');
 
       expect(result.rules).toHaveLength(3);
-      expect(result.rules.every(r => r.breakpoint === 'md')).toBe(true);
+      expect(result.rules.every(r => hasOnlyVariant(r, 'md'))).toBe(true);
     });
   });
 
@@ -161,13 +173,13 @@ describe('CSSParser - Media Query Support', () => {
 
       expect(result.rules).toHaveLength(2);
       
-      const baseRule = result.rules.find(r => !r.breakpoint);
+      const baseRule = result.rules.find(r => hasNoVariants(r));
       expect(baseRule?.className).toBe('box');
       expect(baseRule?.convertedClasses).toContain('block');
       
-      const responsiveRule = result.rules.find(r => r.breakpoint);
+      const responsiveRule = result.rules.find(r => hasVariant(r, 'md'));
       expect(responsiveRule?.className).toBe('box');
-      expect(responsiveRule?.breakpoint).toBe('md');
+      expect(hasOnlyVariant(responsiveRule!, 'md')).toBe(true);
       expect(responsiveRule?.convertedClasses).toContain('md:flex');
     });
 
@@ -190,13 +202,13 @@ describe('CSSParser - Media Query Support', () => {
 }`;
       const result = await parser.parse(css, 'test.css');
 
-      const baseRule = result.rules.find(r => !r.breakpoint);
+      const baseRule = result.rules.find(r => hasNoVariants(r));
       expect(baseRule?.convertedClasses).toContain('flex');
 
-      const smRule = result.rules.find(r => r.breakpoint === 'sm');
+      const smRule = result.rules.find(r => hasOnlyVariant(r, 'sm'));
       expect(smRule?.convertedClasses).toContain('sm:p-2');
 
-      const lgRule = result.rules.find(r => r.breakpoint === 'lg');
+      const lgRule = result.rules.find(r => hasOnlyVariant(r, 'lg'));
       expect(lgRule?.convertedClasses).toContain('lg:m-4');
     });
   });
@@ -273,7 +285,7 @@ describe('CSSParser - Media Query Support', () => {
       const result = await customParser.parse(css, 'test.css');
 
       expect(result.rules).toHaveLength(1);
-      expect(result.rules[0].breakpoint).toBe('tablet');
+      expect(hasOnlyVariant(result.rules[0], 'tablet')).toBe(true);
     });
 
     it('should handle rem values in custom screens', async () => {
@@ -294,7 +306,7 @@ describe('CSSParser - Media Query Support', () => {
       const result = await customParser.parse(css, 'test.css');
 
       expect(result.rules).toHaveLength(1);
-      expect(result.rules[0].breakpoint).toBe('md');
+      expect(hasOnlyVariant(result.rules[0], 'md')).toBe(true);
     });
   });
 
@@ -313,13 +325,13 @@ describe('CSSParser - Media Query Support', () => {
       expect(rule.utilities).toHaveLength(2);
       
       const flexUtility = rule.utilities.find(u => u.value === 'flex');
-      expect(flexUtility?.variant).toBe('md');
+      expect(flexUtility?.variants).toContain('md');
       
       const marginUtility = rule.utilities.find(u => u.value === 'm-4');
-      expect(marginUtility?.variant).toBe('md');
+      expect(marginUtility?.variants).toContain('md');
     });
 
-    it('should store base utilities without variant', async () => {
+    it('should store base utilities without variants', async () => {
       const css = `
 .box {
   display: block;
@@ -329,7 +341,7 @@ describe('CSSParser - Media Query Support', () => {
       const rule = result.rules[0];
       expect(rule.utilities).toHaveLength(1);
       expect(rule.utilities[0].value).toBe('block');
-      expect(rule.utilities[0].variant).toBeUndefined();
+      expect(rule.utilities[0].variants).toHaveLength(0);
     });
   });
 

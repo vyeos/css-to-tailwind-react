@@ -8,6 +8,11 @@ import { FileWriter } from './fileWriter';
 import { TailwindConfig } from './utils/config';
 import { logger } from './utils/logger';
 import { clearBreakpointCache } from './utils/breakpointResolver';
+import { 
+  assembleUtilities, 
+  mergeUtilities,
+  normalizeVariantOrder 
+} from './utils/variantAssembler';
 
 export interface TransformOptions {
   dryRun: boolean;
@@ -28,8 +33,7 @@ export interface TransformResults {
 }
 
 interface ClassInfo {
-  baseClasses: string[];
-  responsiveClasses: Map<string, string[]>;
+  utilities: Array<{ value: string; variants: string[] }>;
   sourceFile: string;
   fullyConvertible: boolean;
 }
@@ -58,8 +62,6 @@ export async function transformFiles(
 
   clearBreakpointCache();
 
-  // PASS 1: Analyze all files WITHOUT modifying anything
-  // Collect CSS mappings and gather info about what can be safely converted
   const cssClassMap: CSSClassMap = {};
   const cssFileResults: Map<string, {
     content: string;
@@ -72,21 +74,17 @@ export async function transformFiles(
 
   logger.info('\n🔍 Phase 1: Analyzing files...');
 
-  // Analyze CSS files
   if (!options.skipExternal) {
     for (const file of files.filter(f => f.type === 'css')) {
       try {
         const content = fs.readFileSync(file.path, 'utf-8');
         const result = await cssParser.parse(content, file.path);
 
-        // Check if ALL rules in this file are FULLY converted (all declarations)
         const totalRules = result.rules.length;
         const fullyConvertedRules = result.rules.filter(r => r.fullyConverted).length;
         const partiallyConvertedRules = result.rules.filter(r => r.partialConversion).length;
-        // A file is only "fully convertible" if ALL rules are fully converted (no partial conversions)
         const fullyConvertible = totalRules > 0 && totalRules === fullyConvertedRules && partiallyConvertedRules === 0;
 
-        // Build class map (only for fully converted classes - partial conversions keep the CSS)
         result.rules.forEach(rule => {
           if (rule.fullyConverted) {
             const existing = cssClassMap[rule.className];
@@ -113,14 +111,12 @@ export async function transformFiles(
 
         results.warnings += result.warnings.length;
 
-        // Log analysis
         logger.verbose(`Analyzed ${file.path}:`);
         logger.verbose(`  - Total rules: ${totalRules}`);
         logger.verbose(`  - Fully converted rules: ${fullyConvertedRules}`);
         logger.verbose(`  - Partially converted rules: ${partiallyConvertedRules}`);
         logger.verbose(`  - Fully convertible: ${fullyConvertible}`);
 
-        // Log warnings
         result.warnings.forEach(warning => {
           logger.verbose(`⚠️  ${file.path}: ${warning}`);
         });
@@ -132,7 +128,6 @@ export async function transformFiles(
     }
   }
 
-  // PASS 2: Transform JSX/TSX files
   logger.info('\n⚛️  Phase 2: Transforming React components...');
 
   const jsxFileResults: Map<string, {
@@ -148,7 +143,6 @@ export async function transformFiles(
       let hasChanges = false;
       let fileWarnings: string[] = [];
 
-      // Process inline styles
       if (!options.skipInline) {
         try {
           const jsxResult = jsxParser.parse(content, file.path);
@@ -167,7 +161,6 @@ export async function transformFiles(
         }
       }
 
-      // Process internal CSS
       if (!options.skipInternal) {
         try {
           const internalResult = await cssParser.parseInternalCSS(content, file.path);
@@ -176,7 +169,6 @@ export async function transformFiles(
             content = internalResult.html;
             hasChanges = true;
             
-            // Build class map from internal styles
             internalResult.rules.forEach(rule => {
               if (rule.convertedClasses.length > 0) {
                 const existing = cssClassMap[rule.className];
@@ -205,7 +197,6 @@ export async function transformFiles(
 
       results.warnings += fileWarnings.length;
 
-      // Log warnings
       fileWarnings.forEach(warning => {
         logger.verbose(`⚠️  ${file.path}: ${warning}`);
       });
@@ -216,8 +207,6 @@ export async function transformFiles(
     }
   }
 
-  // PASS 3: Replace className references from external CSS
-  // This must happen after all JSX files are parsed
   if (Object.keys(cssClassMap).length > 0) {
     logger.info('\n🔄 Phase 3: Replacing className references...');
 
@@ -225,7 +214,6 @@ export async function transformFiles(
       let content = fileResult.newContent;
       let hasChanges = fileResult.hasChanges;
 
-      // Replace className references
       const replacementResult = replaceClassNameReferences(content, cssClassMap);
       if (replacementResult.hasChanges) {
         content = replacementResult.code;
@@ -235,7 +223,6 @@ export async function transformFiles(
         logger.verbose(`Replaced ${replacementResult.replacements} class references in ${path.basename(filePath)}`);
       }
 
-      // Update the result
       jsxFileResults.set(filePath, {
         ...fileResult,
         newContent: content,
@@ -244,10 +231,8 @@ export async function transformFiles(
     }
   }
 
-  // PASS 4: Write all changes
   logger.info('\n💾 Phase 4: Writing changes...');
 
-  // Write JSX files
   for (const [filePath, fileResult] of jsxFileResults) {
     if (fileResult.hasChanges) {
       const success = await fileWriter.writeFile(filePath, fileResult.newContent, fileResult.content);
@@ -257,20 +242,16 @@ export async function transformFiles(
     }
   }
 
-  // Write CSS files (SAFETY: Only modify if fully convertible or explicitly allowed)
   if (!options.skipExternal) {
     for (const [filePath, fileResult] of cssFileResults) {
       if (!fileResult.hasChanges) continue;
 
-      // SAFETY RULE 1: Never modify CSS files that aren't fully convertible
-      // unless they only have unconvertible rules (no changes needed)
       if (!fileResult.fullyConvertible) {
         logger.warn(`⏭️  Skipping ${path.basename(filePath)} - not fully convertible (would break styles)`);
         logger.warn(`   Convertible: ${fileResult.rules.filter(r => r.convertedClasses.length > 0).length}/${fileResult.rules.length} rules`);
         continue;
       }
 
-      // SAFETY RULE 2: Only delete if ALL rules converted AND --delete-css flag used
       if (fileResult.canDelete && options.deleteCss) {
         const success = await fileWriter.deleteFile(filePath);
         if (success) {
@@ -278,10 +259,8 @@ export async function transformFiles(
           logger.info(`🗑️  Deleted ${path.basename(filePath)} (all rules converted)`);
         }
       } else if (fileResult.canDelete && !options.deleteCss) {
-        // File is empty but don't delete without permission
         logger.info(`ℹ️  ${path.basename(filePath)} is now empty (use --delete-css to remove)`);
       } else {
-        // Write modified CSS (only if fully convertible)
         const success = await fileWriter.writeFile(filePath, fileResult.newContent, fileResult.content);
         if (success) {
           results.filesModified++;
@@ -294,57 +273,38 @@ export async function transformFiles(
 }
 
 function buildClassInfoFromRule(rule: CSSRule, sourceFile: string): ClassInfo {
-  const info: ClassInfo = {
-    baseClasses: [],
-    responsiveClasses: new Map(),
+  return {
+    utilities: rule.utilities.map(u => ({
+      value: u.value,
+      variants: normalizeVariantOrder([...u.variants])
+    })),
     sourceFile,
     fullyConvertible: true
   };
-  
-  for (const utility of rule.utilities) {
-    if (utility.variant) {
-      const existing = info.responsiveClasses.get(utility.variant) || [];
-      existing.push(utility.value);
-      info.responsiveClasses.set(utility.variant, existing);
-    } else {
-      info.baseClasses.push(utility.value);
-    }
-  }
-  
-  return info;
 }
 
 function mergeRuleIntoClassInfo(info: ClassInfo, rule: CSSRule): void {
   for (const utility of rule.utilities) {
-    if (utility.variant) {
-      const existing = info.responsiveClasses.get(utility.variant) || [];
-      if (!existing.includes(utility.value)) {
-        existing.push(utility.value);
-        info.responsiveClasses.set(utility.variant, existing);
+    const existing = info.utilities.find(u => u.value === utility.value);
+    if (existing) {
+      for (const variant of utility.variants) {
+        if (!existing.variants.includes(variant)) {
+          existing.variants.push(variant);
+        }
       }
+      existing.variants = normalizeVariantOrder(existing.variants);
     } else {
-      if (!info.baseClasses.includes(utility.value)) {
-        info.baseClasses.push(utility.value);
-      }
+      info.utilities.push({
+        value: utility.value,
+        variants: normalizeVariantOrder([...utility.variants])
+      });
     }
   }
 }
 
 function assembleTailwindClasses(info: ClassInfo): string {
-  const classes: string[] = [...info.baseClasses];
-  
-  const sortedBreakpoints = ['sm', 'md', 'lg', 'xl', '2xl'];
-  
-  for (const bp of sortedBreakpoints) {
-    const bpClasses = info.responsiveClasses.get(bp);
-    if (bpClasses) {
-      for (const cls of bpClasses) {
-        classes.push(`${bp}:${cls}`);
-      }
-    }
-  }
-  
-  return classes.join(' ');
+  const merged = mergeUtilities(info.utilities);
+  return assembleUtilities(merged).join(' ');
 }
 
 function replaceClassNameReferences(

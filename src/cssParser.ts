@@ -6,14 +6,24 @@ import {
   Breakpoint, 
   getBreakpoints, 
   resolveBreakpointsFromConfig,
-  processMediaQuery, 
-  prefixWithBreakpoint,
-  clearBreakpointCache 
+  processMediaQuery 
 } from './utils/breakpointResolver';
+import {
+  processPseudoSelector,
+  parseMultipleSelectors,
+  ParsedSelector
+} from './utils/pseudoSelectorResolver';
+import {
+  assembleUtility,
+  assembleUtilities,
+  MergedUtility,
+  mergeUtilities,
+  normalizeVariantOrder
+} from './utils/variantAssembler';
 
 export interface UtilityWithVariant {
   value: string;
-  variant?: string;
+  variants: string[];
 }
 
 export interface CSSRule {
@@ -22,7 +32,6 @@ export interface CSSRule {
   declarations: CSSProperty[];
   convertedClasses: string[];
   utilities: UtilityWithVariant[];
-  breakpoint?: string;
   skipped: boolean;
   fullyConverted: boolean;
   partialConversion: boolean;
@@ -38,7 +47,7 @@ export interface CSSParseResult {
 }
 
 export interface CSSUsageMap {
-  [className: string]: string[]; // className -> file paths
+  [className: string]: string[];
 }
 
 export class CSSParser {
@@ -52,41 +61,11 @@ export class CSSParser {
       : getBreakpoints();
   }
 
-  private processRule(
-    rule: Rule,
-    breakpoint?: string
-  ): { cssRule: CSSRule; conversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null }>; conversionWarnings: string[] } | null {
-    if (rule.selector.includes(':')) {
-      return null;
-    }
-
-    const classNameMatch = rule.selector.match(/^\.([a-zA-Z_-][a-zA-Z0-9_-]*)$/);
-    if (!classNameMatch) {
-      return null;
-    }
-
-    const className = classNameMatch[1];
-    const declarations: CSSProperty[] = [];
-
-    rule.walkDecls((decl) => {
-      if (decl.prop.startsWith('--')) {
-        return;
-      }
-
-      if (decl.value.includes('calc(')) {
-        return;
-      }
-
-      declarations.push({
-        property: decl.prop,
-        value: decl.value
-      });
-    });
-
-    if (declarations.length === 0) {
-      return null;
-    }
-
+  private convertDeclarations(declarations: CSSProperty[]): {
+    utilities: UtilityWithVariant[];
+    conversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null }>;
+    conversionWarnings: string[];
+  } {
     const conversionResults: Array<{
       declaration: CSSProperty;
       converted: boolean;
@@ -110,30 +89,87 @@ export class CSSParser {
       .filter(r => r.converted && r.className)
       .map(r => ({
         value: r.className!,
-        variant: breakpoint
+        variants: []
       }));
 
-    const convertedClasses = utilities.map(u => 
-      u.variant ? prefixWithBreakpoint(u.value, u.variant) : u.value
-    );
+    return { utilities, conversionResults, conversionWarnings };
+  }
 
-    const allDeclarationsConverted = conversionResults.every(r => r.converted);
-    const someDeclarationsConverted = convertedClasses.length > 0;
+  private processRuleWithVariants(
+    rule: Rule,
+    additionalVariants: string[] = []
+  ): { cssRules: CSSRule[]; conversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null }>[]; conversionWarnings: string[] } | null {
+    const selector = rule.selector;
+    const parsedSelectors = parseMultipleSelectors(selector);
+    
+    const validSelectors = parsedSelectors.filter(s => !s.isComplex && s.baseClass);
+    
+    if (validSelectors.length === 0) {
+      return null;
+    }
 
-    const cssRule: CSSRule = {
-      selector: rule.selector,
-      className,
-      declarations,
-      convertedClasses,
-      utilities,
-      breakpoint,
-      skipped: !someDeclarationsConverted,
-      fullyConverted: allDeclarationsConverted,
-      partialConversion: someDeclarationsConverted && !allDeclarationsConverted,
-      reason: !someDeclarationsConverted ? 'No convertible declarations' : undefined
-    };
+    const declarations: CSSProperty[] = [];
 
-    return { cssRule, conversionResults, conversionWarnings };
+    rule.walkDecls((decl) => {
+      if (decl.prop.startsWith('--')) {
+        return;
+      }
+
+      if (decl.value.includes('calc(')) {
+        return;
+      }
+
+      declarations.push({
+        property: decl.prop,
+        value: decl.value
+      });
+    });
+
+    if (declarations.length === 0) {
+      return null;
+    }
+
+    const { utilities, conversionResults, conversionWarnings } = this.convertDeclarations(declarations);
+    
+    const utilitiesWithVariants = utilities.map(u => ({
+      value: u.value,
+      variants: normalizeVariantOrder([...u.variants, ...additionalVariants])
+    }));
+
+    const cssRules: CSSRule[] = [];
+    const allConversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null }>[] = [];
+
+    for (const parsed of validSelectors) {
+      const pseudoVariants = parsed.pseudos || [];
+      const allVariants = normalizeVariantOrder([...pseudoVariants, ...additionalVariants]);
+      
+      const utilitiesForSelector = utilities.map(u => ({
+        value: u.value,
+        variants: allVariants
+      }));
+
+      const convertedClasses = assembleUtilities(utilitiesForSelector);
+
+      const allDeclarationsConverted = conversionResults.every(r => r.converted);
+      const someDeclarationsConverted = convertedClasses.length > 0;
+
+      const cssRule: CSSRule = {
+        selector: selector,
+        className: parsed.baseClass,
+        declarations,
+        convertedClasses,
+        utilities: utilitiesForSelector,
+        skipped: !someDeclarationsConverted,
+        fullyConverted: allDeclarationsConverted,
+        partialConversion: someDeclarationsConverted && !allDeclarationsConverted,
+        reason: !someDeclarationsConverted ? 'No convertible declarations' : undefined
+      };
+
+      cssRules.push(cssRule);
+      allConversionResults.push(conversionResults);
+    }
+
+    return { cssRules, conversionResults: allConversionResults, conversionWarnings };
   }
 
   async parse(css: string, filePath: string): Promise<CSSParseResult> {
@@ -159,7 +195,7 @@ export class CSSParser {
           return;
         }
 
-        const breakpoint = mediaResult.breakpoint!;
+        const responsiveVariant = mediaResult.breakpoint!;
 
         const nestedRules: Rule[] = [];
         atRule.walkRules((rule) => {
@@ -167,19 +203,22 @@ export class CSSParser {
         });
 
         for (const rule of nestedRules) {
-          const result = this.processRule(rule, breakpoint);
+          const result = this.processRuleWithVariants(rule, [responsiveVariant]);
           if (result) {
-            rules.push(result.cssRule);
+            rules.push(...result.cssRules);
             warnings.push(...result.conversionWarnings);
 
-            if (result.cssRule.convertedClasses.length > 0) {
+            const anyConverted = result.cssRules.some(r => r.convertedClasses.length > 0);
+            if (anyConverted) {
               hasChanges = true;
 
-              if (result.cssRule.fullyConverted) {
+              const allFullyConverted = result.cssRules.every(r => r.fullyConverted);
+              if (allFullyConverted) {
                 rule.remove();
-                logger.verbose(`Removed rule .${result.cssRule.className} in @media (min-width) → ${breakpoint}`);
+                const classNames = result.cssRules.map(r => r.className).join(', .');
+                logger.verbose(`Removed rule .${classNames} in @media (min-width) → ${responsiveVariant}`);
               } else {
-                for (const cr of result.conversionResults) {
+                for (const cr of result.conversionResults.flat()) {
                   if (cr.converted) {
                     rule.walkDecls((decl) => {
                       if (decl.prop === cr.declaration.property && decl.value === cr.declaration.value) {
@@ -188,9 +227,11 @@ export class CSSParser {
                     });
                   }
                 }
-                logger.verbose(`Partial conversion of .${result.cssRule.className} in @media → ${breakpoint}`);
+                logger.verbose(`Partial conversion in @media → ${responsiveVariant}`);
               }
             }
+          } else {
+            warnings.push(`Skipped rule in @media: ${rule.selector}`);
           }
         }
 
@@ -205,50 +246,43 @@ export class CSSParser {
           return;
         }
 
-        if (rule.selector.includes(':')) {
-          warnings.push(`Skipped pseudo-selector: ${rule.selector}`);
-          logger.verbose(`Skipping pseudo-selector: ${rule.selector}`);
-          return;
-        }
-
-        const classNameMatch = rule.selector.match(/^\.([a-zA-Z_-][a-zA-Z0-9_-]*)$/);
-        if (!classNameMatch) {
-          warnings.push(`Skipped complex selector: ${rule.selector}`);
-          logger.verbose(`Skipping complex selector: ${rule.selector}`);
-          return;
-        }
-
-        const result = this.processRule(rule);
+        const result = this.processRuleWithVariants(rule);
+        
         if (!result) {
+          const parsedSelectors = parseMultipleSelectors(rule.selector);
+          const allComplex = parsedSelectors.every(s => s.isComplex);
+          
+          if (allComplex) {
+            const reasons = parsedSelectors.map(s => s.reason).filter(Boolean);
+            warnings.push(...reasons as string[]);
+            logger.verbose(`Skipping complex selector: ${rule.selector}`);
+          }
           return;
         }
 
-        const { cssRule, conversionResults, conversionWarnings } = result;
-        rules.push(cssRule);
-        warnings.push(...conversionWarnings);
+        rules.push(...result.cssRules);
+        warnings.push(...result.conversionWarnings);
 
-        if (cssRule.convertedClasses.length > 0) {
+        const anyConverted = result.cssRules.some(r => r.convertedClasses.length > 0);
+        if (anyConverted) {
           hasChanges = true;
 
-          if (cssRule.fullyConverted) {
+          const allFullyConverted = result.cssRules.every(r => r.fullyConverted);
+          if (allFullyConverted) {
             rule.remove();
-            logger.verbose(`Removed rule .${cssRule.className} (all ${cssRule.declarations.length} declarations converted)`);
+            const classNames = result.cssRules.map(r => r.className).join(', .');
+            logger.verbose(`Removed rule .${classNames} (all declarations converted)`);
           } else {
-            let removedCount = 0;
-            rule.walkDecls((decl) => {
-              const wasConverted = conversionResults.some(r =>
-                r.converted &&
-                r.declaration.property === decl.prop &&
-                r.declaration.value === decl.value
-              );
-
-              if (wasConverted) {
-                decl.remove();
-                removedCount++;
+            for (const cr of result.conversionResults.flat()) {
+              if (cr.converted) {
+                rule.walkDecls((decl) => {
+                  if (decl.prop === cr.declaration.property && decl.value === cr.declaration.value) {
+                    decl.remove();
+                  }
+                });
               }
-            });
-
-            logger.verbose(`Partial conversion of .${cssRule.className}: removed ${removedCount}/${cssRule.declarations.length} declarations`);
+            }
+            logger.verbose(`Partial conversion of rule`);
           }
         }
       });
@@ -283,7 +317,6 @@ export class CSSParser {
     const styles: Array<{ content: string; start: number; end: number }> = [];
     const warnings: string[] = [];
 
-    // Simple regex to find style tags (this is safe for finding tags, not for parsing content)
     const styleRegex = /<style[^>]*>([\s\S]*?)<\/style>/gi;
     let match;
 
@@ -311,7 +344,6 @@ export class CSSParser {
 
     const { styles } = this.parseInternalStyle(html);
 
-    // Process styles in reverse order to preserve indices
     for (let i = styles.length - 1; i >= 0; i--) {
       const style = styles[i];
       
@@ -325,10 +357,8 @@ export class CSSParser {
           hasChanges = true;
 
           if (result.canDelete || result.css.trim() === '') {
-            // Remove entire style tag
             modifiedHtml = modifiedHtml.slice(0, style.start) + modifiedHtml.slice(style.end);
           } else {
-            // Replace style content
             const before = modifiedHtml.slice(0, style.start);
             const after = modifiedHtml.slice(style.end);
             const tagStart = html.slice(style.start).match(/<style[^>]*>/)?.[0] || '<style>';
@@ -353,7 +383,6 @@ export class CSSParser {
   extractImportPaths(code: string): string[] {
     const imports: string[] = [];
     
-    // Match CSS imports
     const importRegex = /import\s+['"]([^'"]+\.css)['"];?/g;
     let match;
     
@@ -361,7 +390,6 @@ export class CSSParser {
       imports.push(match[1]);
     }
 
-    // Match require statements
     const requireRegex = /require\s*\(\s*['"]([^'"]+\.css)['"]\s*\)/g;
     while ((match = requireRegex.exec(code)) !== null) {
       imports.push(match[1]);
