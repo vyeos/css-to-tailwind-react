@@ -369,7 +369,7 @@ describe('CSSParser - Pseudo Selector Support', () => {
 
       expect(result.rules).toHaveLength(0);
       expect(result.warnings.length).toBeGreaterThan(0);
-      expect(result.warnings[0]).toContain('complex pseudo chain');
+      expect(result.warnings[0]).toContain('Invalid selector part');
     });
 
     it('should skip selector with combinator', async () => {

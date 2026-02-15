@@ -13,6 +13,7 @@ import {
   mergeUtilities,
   normalizeVariantOrder 
 } from './utils/variantAssembler';
+import { transformDescendantSelectors } from './jsxDescendantTransformer';
 
 export interface TransformOptions {
   dryRun: boolean;
@@ -42,6 +43,11 @@ interface CSSClassMap {
   [className: string]: ClassInfo;
 }
 
+interface CollectedRules {
+  simpleRules: CSSRule[];
+  descendantRules: CSSRule[];
+}
+
 export async function transformFiles(
   files: ScannedFile[],
   options: TransformOptions
@@ -63,6 +69,7 @@ export async function transformFiles(
   clearBreakpointCache();
 
   const cssClassMap: CSSClassMap = {};
+  const allDescendantRules: CSSRule[] = [];
   const cssFileResults: Map<string, {
     content: string;
     newContent: string;
@@ -86,7 +93,12 @@ export async function transformFiles(
         const fullyConvertible = totalRules > 0 && totalRules === fullyConvertedRules && partiallyConvertedRules === 0;
 
         result.rules.forEach(rule => {
-          if (rule.fullyConverted) {
+          if (rule.isDescendant) {
+            if (rule.convertedClasses.length > 0) {
+              allDescendantRules.push(rule);
+              results.stylesConverted += rule.declarations.length;
+            }
+          } else if (rule.fullyConverted && rule.className) {
             const existing = cssClassMap[rule.className];
             if (existing) {
               mergeRuleIntoClassInfo(existing, rule);
@@ -170,7 +182,12 @@ export async function transformFiles(
             hasChanges = true;
             
             internalResult.rules.forEach(rule => {
-              if (rule.convertedClasses.length > 0) {
+              if (rule.isDescendant) {
+                if (rule.convertedClasses.length > 0) {
+                  allDescendantRules.push(rule);
+                  results.stylesConverted += rule.declarations.length;
+                }
+              } else if (rule.convertedClasses.length > 0 && rule.className) {
                 const existing = cssClassMap[rule.className];
                 if (existing) {
                   mergeRuleIntoClassInfo(existing, rule);
@@ -221,6 +238,37 @@ export async function transformFiles(
         results.classesReplaced += replacementResult.replacements;
         
         logger.verbose(`Replaced ${replacementResult.replacements} class references in ${path.basename(filePath)}`);
+      }
+
+      jsxFileResults.set(filePath, {
+        ...fileResult,
+        newContent: content,
+        hasChanges
+      });
+    }
+  }
+
+  if (allDescendantRules.length > 0) {
+    logger.info('\n🌳 Phase 3.5: Applying descendant selector rules...');
+
+    for (const [filePath, fileResult] of jsxFileResults) {
+      let content = fileResult.newContent;
+      let hasChanges = fileResult.hasChanges;
+
+      const descendantResult = transformDescendantSelectors(content, allDescendantRules);
+      if (descendantResult.hasChanges) {
+        content = descendantResult.code;
+        hasChanges = true;
+        results.classesReplaced += descendantResult.transformations;
+        
+        logger.verbose(`Applied ${descendantResult.transformations} descendant transformations in ${path.basename(filePath)}`);
+      }
+
+      if (descendantResult.warnings.length > 0) {
+        results.warnings += descendantResult.warnings.length;
+        descendantResult.warnings.forEach(warning => {
+          logger.verbose(`⚠️  ${filePath}: ${warning}`);
+        });
       }
 
       jsxFileResults.set(filePath, {

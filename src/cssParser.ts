@@ -14,6 +14,13 @@ import {
   ParsedSelector
 } from './utils/pseudoSelectorResolver';
 import {
+  parseDescendantSelector,
+  processDescendantSelector,
+  DescendantSelector,
+  SelectorPart,
+  isHtmlElement
+} from './utils/descendantSelectorResolver';
+import {
   assembleUtility,
   assembleUtilities,
   MergedUtility,
@@ -26,6 +33,11 @@ export interface UtilityWithVariant {
   variants: string[];
 }
 
+export interface SelectorTarget {
+  type: 'class' | 'element';
+  name: string;
+}
+
 export interface CSSRule {
   selector: string;
   className: string;
@@ -36,6 +48,9 @@ export interface CSSRule {
   fullyConverted: boolean;
   partialConversion: boolean;
   reason?: string;
+  isDescendant: boolean;
+  parentSelector?: SelectorTarget;
+  targetSelector?: SelectorTarget;
 }
 
 export interface CSSParseResult {
@@ -95,7 +110,7 @@ export class CSSParser {
     return { utilities, conversionResults, conversionWarnings };
   }
 
-  private processRuleWithVariants(
+  private processSimpleRule(
     rule: Rule,
     additionalVariants: string[] = []
   ): { cssRules: CSSRule[]; conversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null }>[]; conversionWarnings: string[] } | null {
@@ -162,7 +177,8 @@ export class CSSParser {
         skipped: !someDeclarationsConverted,
         fullyConverted: allDeclarationsConverted,
         partialConversion: someDeclarationsConverted && !allDeclarationsConverted,
-        reason: !someDeclarationsConverted ? 'No convertible declarations' : undefined
+        reason: !someDeclarationsConverted ? 'No convertible declarations' : undefined,
+        isDescendant: false
       };
 
       cssRules.push(cssRule);
@@ -170,6 +186,71 @@ export class CSSParser {
     }
 
     return { cssRules, conversionResults: allConversionResults, conversionWarnings };
+  }
+
+  private processDescendantRule(
+    rule: Rule,
+    additionalVariants: string[] = []
+  ): { cssRule: CSSRule; conversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null }>; conversionWarnings: string[] } | null {
+    const selector = rule.selector;
+    const parsed = parseDescendantSelector(selector);
+    
+    if (parsed.isComplex || !parsed.parent) {
+      return null;
+    }
+
+    const declarations: CSSProperty[] = [];
+
+    rule.walkDecls((decl) => {
+      if (decl.prop.startsWith('--')) {
+        return;
+      }
+
+      if (decl.value.includes('calc(')) {
+        return;
+      }
+
+      declarations.push({
+        property: decl.prop,
+        value: decl.value
+      });
+    });
+
+    if (declarations.length === 0) {
+      return null;
+    }
+
+    const { utilities, conversionResults, conversionWarnings } = this.convertDeclarations(declarations);
+    
+    const utilitiesWithVariants = utilities.map(u => ({
+      value: u.value,
+      variants: normalizeVariantOrder([...u.variants, ...additionalVariants])
+    }));
+
+    const convertedClasses = assembleUtilities(utilitiesWithVariants);
+
+    const allDeclarationsConverted = conversionResults.every(r => r.converted);
+    const someDeclarationsConverted = convertedClasses.length > 0;
+
+    const className = parsed.parent.type === 'class' ? parsed.parent.name : '';
+    const targetName = parsed.target.type === 'class' ? `.${parsed.target.name}` : parsed.target.name;
+
+    const cssRule: CSSRule = {
+      selector: selector,
+      className,
+      declarations,
+      convertedClasses,
+      utilities: utilitiesWithVariants,
+      skipped: !someDeclarationsConverted,
+      fullyConverted: allDeclarationsConverted,
+      partialConversion: someDeclarationsConverted && !allDeclarationsConverted,
+      reason: !someDeclarationsConverted ? 'No convertible declarations' : undefined,
+      isDescendant: true,
+      parentSelector: parsed.parent,
+      targetSelector: parsed.target
+    };
+
+    return { cssRule, conversionResults, conversionWarnings };
   }
 
   async parse(css: string, filePath: string): Promise<CSSParseResult> {
@@ -203,22 +284,49 @@ export class CSSParser {
         });
 
         for (const rule of nestedRules) {
-          const result = this.processRuleWithVariants(rule, [responsiveVariant]);
-          if (result) {
-            rules.push(...result.cssRules);
-            warnings.push(...result.conversionWarnings);
+          const descendantResult = this.processDescendantRule(rule, [responsiveVariant]);
+          if (descendantResult) {
+            rules.push(descendantResult.cssRule);
+            warnings.push(...descendantResult.conversionWarnings);
 
-            const anyConverted = result.cssRules.some(r => r.convertedClasses.length > 0);
+            if (descendantResult.cssRule.convertedClasses.length > 0) {
+              hasChanges = true;
+
+              if (descendantResult.cssRule.fullyConverted) {
+                rule.remove();
+                logger.verbose(`Removed descendant rule ${rule.selector} in @media → ${responsiveVariant}`);
+              } else {
+                for (const cr of descendantResult.conversionResults) {
+                  if (cr.converted) {
+                    rule.walkDecls((decl) => {
+                      if (decl.prop === cr.declaration.property && decl.value === cr.declaration.value) {
+                        decl.remove();
+                      }
+                    });
+                  }
+                }
+                logger.verbose(`Partial conversion of descendant rule in @media → ${responsiveVariant}`);
+              }
+            }
+            continue;
+          }
+
+          const simpleResult = this.processSimpleRule(rule, [responsiveVariant]);
+          if (simpleResult) {
+            rules.push(...simpleResult.cssRules);
+            warnings.push(...simpleResult.conversionWarnings);
+
+            const anyConverted = simpleResult.cssRules.some(r => r.convertedClasses.length > 0);
             if (anyConverted) {
               hasChanges = true;
 
-              const allFullyConverted = result.cssRules.every(r => r.fullyConverted);
+              const allFullyConverted = simpleResult.cssRules.every(r => r.fullyConverted);
               if (allFullyConverted) {
                 rule.remove();
-                const classNames = result.cssRules.map(r => r.className).join(', .');
+                const classNames = simpleResult.cssRules.map(r => r.className).join(', .');
                 logger.verbose(`Removed rule .${classNames} in @media (min-width) → ${responsiveVariant}`);
               } else {
-                for (const cr of result.conversionResults.flat()) {
+                for (const cr of simpleResult.conversionResults.flat()) {
                   if (cr.converted) {
                     rule.walkDecls((decl) => {
                       if (decl.prop === cr.declaration.property && decl.value === cr.declaration.value) {
@@ -246,34 +354,67 @@ export class CSSParser {
           return;
         }
 
-        const result = this.processRuleWithVariants(rule);
-        
-        if (!result) {
-          const parsedSelectors = parseMultipleSelectors(rule.selector);
-          const allComplex = parsedSelectors.every(s => s.isComplex);
-          
-          if (allComplex) {
-            const reasons = parsedSelectors.map(s => s.reason).filter(Boolean);
-            warnings.push(...reasons as string[]);
-            logger.verbose(`Skipping complex selector: ${rule.selector}`);
+        const descendantResult = this.processDescendantRule(rule);
+        if (descendantResult) {
+          rules.push(descendantResult.cssRule);
+          warnings.push(...descendantResult.conversionWarnings);
+
+          if (descendantResult.cssRule.convertedClasses.length > 0) {
+            hasChanges = true;
+
+            if (descendantResult.cssRule.fullyConverted) {
+              rule.remove();
+              logger.verbose(`Removed descendant rule ${rule.selector}`);
+            } else {
+              for (const cr of descendantResult.conversionResults) {
+                if (cr.converted) {
+                  rule.walkDecls((decl) => {
+                    if (decl.prop === cr.declaration.property && decl.value === cr.declaration.value) {
+                      decl.remove();
+                    }
+                  });
+                }
+              }
+              logger.verbose(`Partial conversion of descendant rule`);
+            }
           }
           return;
         }
 
-        rules.push(...result.cssRules);
-        warnings.push(...result.conversionWarnings);
+        const simpleResult = this.processSimpleRule(rule);
+        
+        if (!simpleResult) {
+          const parsed = parseDescendantSelector(rule.selector);
+          if (parsed.isComplex) {
+            warnings.push(parsed.reason || `Skipped complex selector: ${rule.selector}`);
+            logger.verbose(`Skipping complex selector: ${rule.selector}`);
+          } else {
+            const parsedSelectors = parseMultipleSelectors(rule.selector);
+            const allComplex = parsedSelectors.every(s => s.isComplex);
+            
+            if (allComplex) {
+              const reasons = parsedSelectors.map(s => s.reason).filter(Boolean);
+              warnings.push(...reasons as string[]);
+              logger.verbose(`Skipping complex selector: ${rule.selector}`);
+            }
+          }
+          return;
+        }
 
-        const anyConverted = result.cssRules.some(r => r.convertedClasses.length > 0);
+        rules.push(...simpleResult.cssRules);
+        warnings.push(...simpleResult.conversionWarnings);
+
+        const anyConverted = simpleResult.cssRules.some(r => r.convertedClasses.length > 0);
         if (anyConverted) {
           hasChanges = true;
 
-          const allFullyConverted = result.cssRules.every(r => r.fullyConverted);
+          const allFullyConverted = simpleResult.cssRules.every(r => r.fullyConverted);
           if (allFullyConverted) {
             rule.remove();
-            const classNames = result.cssRules.map(r => r.className).join(', .');
+            const classNames = simpleResult.cssRules.map(r => r.className).join(', .');
             logger.verbose(`Removed rule .${classNames} (all declarations converted)`);
           } else {
-            for (const cr of result.conversionResults.flat()) {
+            for (const cr of simpleResult.conversionResults.flat()) {
               if (cr.converted) {
                 rule.walkDecls((decl) => {
                   if (decl.prop === cr.declaration.property && decl.value === cr.declaration.value) {

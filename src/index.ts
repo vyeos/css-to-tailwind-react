@@ -3,7 +3,7 @@ export { scanProject, ScannedFile } from './scanner';
 export { transformFiles, TransformOptions, TransformResults } from './transformer';
 export { TailwindMapper, CSSProperty, ConversionResult } from './tailwindMapper';
 export { JSXParser, JSXTransformation, JSXParseResult } from './jsxParser';
-export { CSSParser, CSSRule, CSSParseResult, UtilityWithVariant } from './cssParser';
+export { CSSParser, CSSRule, CSSParseResult, UtilityWithVariant, SelectorTarget } from './cssParser';
 export { FileWriter, FileWriteOptions } from './fileWriter';
 export { loadTailwindConfig, TailwindConfig } from './utils/config';
 export { logger } from './utils/logger';
@@ -38,3 +38,18 @@ export {
   mergeUtilities,
   MergedUtility
 } from './utils/variantAssembler';
+export {
+  DescendantSelector,
+  SelectorPart,
+  SelectorType,
+  parseDescendantSelector,
+  isDescendantSelector,
+  isSimpleSelector,
+  processDescendantSelector,
+  isHtmlElement
+} from './utils/descendantSelectorResolver';
+export {
+  transformDescendantSelectors,
+  DescendantTransformResult,
+  groupDescendantRulesByParent
+} from './jsxDescendantTransformer';
