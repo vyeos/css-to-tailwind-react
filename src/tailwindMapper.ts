@@ -189,15 +189,7 @@ export class TailwindMapper {
 
   private convertMargin(prop: string, value: string): ConversionResult {
     const px = this.extractPx(value);
-    if (px === null) {
-      return { className: null, skipped: true, reason: `Non-pixel margin value: ${value}` };
-    }
-
-    const spacing = this.pxToSpacing(px);
-    if (!spacing) {
-      return { className: null, skipped: true, reason: `No matching spacing for: ${value}` };
-    }
-
+    
     const sideMap: Record<string, string> = {
       'margin': 'm',
       'margin-top': 'mt',
@@ -207,22 +199,26 @@ export class TailwindMapper {
       'margin-x': 'mx',
       'margin-y': 'my'
     };
-
     const prefix = sideMap[prop] || 'm';
+    
+    if (px === null) {
+      if (/^-?\d+(\.\d+)?(px|rem|em)?$/.test(value)) {
+        return { className: `${prefix}-[${value}]`, skipped: false };
+      }
+      return { className: null, skipped: true, reason: `Non-pixel margin value: ${value}` };
+    }
+
+    const spacing = this.pxToSpacing(px);
+    if (!spacing) {
+      return { className: `${prefix}-[${value}]`, skipped: false };
+    }
+
     return { className: `${prefix}-${spacing}`, skipped: false };
   }
 
   private convertPadding(prop: string, value: string): ConversionResult {
     const px = this.extractPx(value);
-    if (px === null) {
-      return { className: null, skipped: true, reason: `Non-pixel padding value: ${value}` };
-    }
-
-    const spacing = this.pxToSpacing(px);
-    if (!spacing) {
-      return { className: null, skipped: true, reason: `No matching spacing for: ${value}` };
-    }
-
+    
     const sideMap: Record<string, string> = {
       'padding': 'p',
       'padding-top': 'pt',
@@ -232,8 +228,20 @@ export class TailwindMapper {
       'padding-x': 'px',
       'padding-y': 'py'
     };
-
     const prefix = sideMap[prop] || 'p';
+    
+    if (px === null) {
+      if (/^-?\d+(\.\d+)?(px|rem|em)?$/.test(value)) {
+        return { className: `${prefix}-[${value}]`, skipped: false };
+      }
+      return { className: null, skipped: true, reason: `Non-pixel padding value: ${value}` };
+    }
+
+    const spacing = this.pxToSpacing(px);
+    if (!spacing) {
+      return { className: `${prefix}-[${value}]`, skipped: false };
+    }
+
     return { className: `${prefix}-${spacing}`, skipped: false };
   }
 
@@ -284,6 +292,12 @@ export class TailwindMapper {
       if (Math.abs(closest - px) / px < 0.15) {
         return { className: sizeMap[closest], skipped: false };
       }
+      
+      return { className: `text-[${value}]`, skipped: false };
+    }
+
+    if (/^\d+(\.\d+)?(px|rem|em)?$/.test(value)) {
+      return { className: `text-[${value}]`, skipped: false };
     }
 
     return { className: null, skipped: true, reason: `Non-standard font-size: ${value}` };

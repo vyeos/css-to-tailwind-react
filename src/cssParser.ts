@@ -34,6 +34,16 @@ import {
   ZERO_SPECIFICITY
 } from './utils/specificityCalculator';
 import { getPropertyForUtility } from './utils/propertyMapper';
+import {
+  VariableRegistry,
+  VariableDefinition,
+  VariableScope,
+  ResolutionContext,
+  isCssVariable,
+  isVarExpression,
+  createGlobalScope,
+  createSelectorScope
+} from './utils/variableRegistry';
 
 export interface UtilityWithVariant {
   value: string;
@@ -79,44 +89,146 @@ export class CSSParser {
   private mapper: TailwindMapper;
   private breakpoints: Breakpoint[];
   private sourceOrderCounter: number = 0;
+  private variableRegistry: VariableRegistry;
 
   constructor(mapper: TailwindMapper, screens?: Record<string, string | [string, string]>) {
     this.mapper = mapper;
     this.breakpoints = screens 
       ? resolveBreakpointsFromConfig(screens) 
       : getBreakpoints();
+    this.variableRegistry = new VariableRegistry();
   }
 
   private resetSourceOrder(): void {
     this.sourceOrderCounter = 0;
+    this.variableRegistry.clear();
   }
 
   private getNextSourceOrder(): number {
     return ++this.sourceOrderCounter;
   }
 
+  private collectVariables(
+    node: Root | AtRule,
+    additionalVariants: string[] = []
+  ): void {
+    let sourceOrder = 0;
+    
+    node.walkRules((rule) => {
+      const selector = rule.selector;
+      const isRootSelector = selector === ':root';
+      
+      let scope: VariableScope;
+      let specificity: Specificity;
+      
+      if (isRootSelector) {
+        scope = createGlobalScope();
+        specificity = { inline: 0, id: 0, class: 0, element: 0 };
+      } else {
+        const parsed = parseDescendantSelector(selector);
+        if (parsed.isComplex) {
+          return;
+        }
+        
+        if (parsed.parent) {
+          scope = createSelectorScope(selector, parsed.parent.type);
+          specificity = calculateDescendantSpecificity(
+            parsed.parent.type,
+            parsed.parent.name,
+            parsed.target.type,
+            parsed.target.name
+          );
+        } else {
+          const selectorType = selector.startsWith('.') ? 'class' : 'element';
+          scope = createSelectorScope(selector, selectorType);
+          specificity = calculateSelectorSpecificity(selector);
+        }
+      }
+      
+      rule.walkDecls((decl) => {
+        if (!isCssVariable(decl.prop)) {
+          return;
+        }
+        
+        const varDef: VariableDefinition = {
+          name: decl.prop,
+          value: decl.value,
+          scope,
+          specificity,
+          sourceOrder: ++sourceOrder,
+          variants: additionalVariants
+        };
+        
+        this.variableRegistry.register(varDef);
+        logger.verbose(`Registered CSS variable: ${decl.prop} = ${decl.value} (scope: ${scope.type})`);
+      });
+    });
+  }
+
+  private resolveDeclarationValue(
+    value: string,
+    selector: string,
+    specificity: Specificity,
+    variants: string[]
+  ): { resolvedValue: string; hasUnresolved: boolean } {
+    if (!isVarExpression(value)) {
+      return { resolvedValue: value, hasUnresolved: false };
+    }
+    
+    const context: ResolutionContext = {
+      selector,
+      specificity,
+      variants
+    };
+    
+    const result = this.variableRegistry.resolveValue(value, context);
+    return { resolvedValue: result.value, hasUnresolved: result.hasUnresolved };
+  }
+
   private convertDeclarations(
     declarations: CSSProperty[],
     specificity: Specificity,
-    sourceOrder: number
+    sourceOrder: number,
+    selector: string = '',
+    variants: string[] = []
   ): {
     utilities: UtilityWithVariant[];
-    conversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null }>;
+    conversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null; resolvedValue?: string }>;
     conversionWarnings: string[];
   } {
     const conversionResults: Array<{
       declaration: CSSProperty;
       converted: boolean;
       className: string | null;
+      resolvedValue?: string;
     }> = [];
     const conversionWarnings: string[] = [];
 
     declarations.forEach(decl => {
-      const result = this.mapper.convertProperty(decl.property, decl.value);
+      const valueToConvert = this.resolveDeclarationValue(
+        decl.value,
+        selector,
+        specificity,
+        variants
+      );
+      
+      if (valueToConvert.hasUnresolved) {
+        conversionResults.push({
+          declaration: decl,
+          converted: false,
+          className: null,
+          resolvedValue: valueToConvert.resolvedValue
+        });
+        conversionWarnings.push(`Could not fully resolve var() in: ${decl.property}: ${decl.value}`);
+        return;
+      }
+      
+      const result = this.mapper.convertProperty(decl.property, valueToConvert.resolvedValue);
       conversionResults.push({
         declaration: decl,
         converted: !result.skipped && result.className !== null,
-        className: result.className
+        className: result.className,
+        resolvedValue: valueToConvert.resolvedValue
       });
       if (result.skipped && result.reason) {
         conversionWarnings.push(result.reason);
@@ -139,7 +251,7 @@ export class CSSParser {
   private processSimpleRule(
     rule: Rule,
     additionalVariants: string[] = []
-  ): { cssRules: CSSRule[]; conversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null }>[]; conversionWarnings: string[] } | null {
+  ): { cssRules: CSSRule[]; conversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null; resolvedValue?: string }>[]; conversionWarnings: string[] } | null {
     const selector = rule.selector;
     const parsedSelectors = parseMultipleSelectors(selector);
     
@@ -171,7 +283,7 @@ export class CSSParser {
     }
 
     const cssRules: CSSRule[] = [];
-    const allConversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null }>[] = [];
+    const allConversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null; resolvedValue?: string }>[] = [];
     const allConversionWarnings: string[] = [];
 
     for (const parsed of validSelectors) {
@@ -185,14 +297,16 @@ export class CSSParser {
         element: specificity.element
       };
       
+      const pseudoVariants = parsed.pseudos || [];
+      const allVariants = normalizeVariantOrder([...pseudoVariants, ...additionalVariants]);
+      
       const { utilities, conversionResults, conversionWarnings } = this.convertDeclarations(
         declarations,
         specificityWithPseudo,
-        sourceOrder
+        sourceOrder,
+        selector,
+        allVariants
       );
-      
-      const pseudoVariants = parsed.pseudos || [];
-      const allVariants = normalizeVariantOrder([...pseudoVariants, ...additionalVariants]);
       
       const utilitiesForSelector = utilities.map(u => ({
         ...u,
@@ -228,7 +342,7 @@ export class CSSParser {
   private processDescendantRule(
     rule: Rule,
     additionalVariants: string[] = []
-  ): { cssRule: CSSRule; conversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null }>; conversionWarnings: string[] } | null {
+  ): { cssRule: CSSRule; conversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null; resolvedValue?: string }>; conversionWarnings: string[] } | null {
     const selector = rule.selector;
     const parsed = parseDescendantSelector(selector);
     
@@ -268,7 +382,9 @@ export class CSSParser {
     const { utilities, conversionResults, conversionWarnings } = this.convertDeclarations(
       declarations,
       specificity,
-      sourceOrder
+      sourceOrder,
+      selector,
+      additionalVariants
     );
     
     const utilitiesWithVariants = utilities.map(u => ({
@@ -314,6 +430,8 @@ export class CSSParser {
         from: filePath
       }).then(result => result.root);
 
+      this.collectVariables(root, []);
+
       root.walkAtRules((atRule) => {
         if (atRule.name !== 'media') {
           return;
@@ -327,6 +445,8 @@ export class CSSParser {
         }
 
         const responsiveVariant = mediaResult.breakpoint!;
+        
+        this.collectVariables(atRule, [responsiveVariant]);
 
         const nestedRules: Rule[] = [];
         atRule.walkRules((rule) => {

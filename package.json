@@ -1,6 +1,6 @@
 {
   "name": "css-to-tailwind-react",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Convert traditional CSS (inline, internal, and external) into Tailwind CSS utility classes for React-based frameworks",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
