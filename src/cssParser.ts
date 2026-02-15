@@ -27,10 +27,20 @@ import {
   mergeUtilities,
   normalizeVariantOrder
 } from './utils/variantAssembler';
+import {
+  Specificity,
+  calculateSelectorSpecificity,
+  calculateDescendantSpecificity,
+  ZERO_SPECIFICITY
+} from './utils/specificityCalculator';
+import { getPropertyForUtility } from './utils/propertyMapper';
 
 export interface UtilityWithVariant {
   value: string;
   variants: string[];
+  cssProperty: string;
+  specificity: Specificity;
+  sourceOrder: number;
 }
 
 export interface SelectorTarget {
@@ -68,6 +78,7 @@ export interface CSSUsageMap {
 export class CSSParser {
   private mapper: TailwindMapper;
   private breakpoints: Breakpoint[];
+  private sourceOrderCounter: number = 0;
 
   constructor(mapper: TailwindMapper, screens?: Record<string, string | [string, string]>) {
     this.mapper = mapper;
@@ -76,7 +87,19 @@ export class CSSParser {
       : getBreakpoints();
   }
 
-  private convertDeclarations(declarations: CSSProperty[]): {
+  private resetSourceOrder(): void {
+    this.sourceOrderCounter = 0;
+  }
+
+  private getNextSourceOrder(): number {
+    return ++this.sourceOrderCounter;
+  }
+
+  private convertDeclarations(
+    declarations: CSSProperty[],
+    specificity: Specificity,
+    sourceOrder: number
+  ): {
     utilities: UtilityWithVariant[];
     conversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null }>;
     conversionWarnings: string[];
@@ -104,7 +127,10 @@ export class CSSParser {
       .filter(r => r.converted && r.className)
       .map(r => ({
         value: r.className!,
-        variants: []
+        variants: [],
+        cssProperty: r.declaration.property,
+        specificity,
+        sourceOrder
       }));
 
     return { utilities, conversionResults, conversionWarnings };
@@ -144,22 +170,32 @@ export class CSSParser {
       return null;
     }
 
-    const { utilities, conversionResults, conversionWarnings } = this.convertDeclarations(declarations);
-    
-    const utilitiesWithVariants = utilities.map(u => ({
-      value: u.value,
-      variants: normalizeVariantOrder([...u.variants, ...additionalVariants])
-    }));
-
     const cssRules: CSSRule[] = [];
     const allConversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null }>[] = [];
+    const allConversionWarnings: string[] = [];
 
     for (const parsed of validSelectors) {
+      const sourceOrder = this.getNextSourceOrder();
+      const specificity = calculateSelectorSpecificity(selector);
+      const pseudoCount = (parsed.pseudos || []).length;
+      const specificityWithPseudo = {
+        inline: specificity.inline,
+        id: specificity.id,
+        class: specificity.class + pseudoCount,
+        element: specificity.element
+      };
+      
+      const { utilities, conversionResults, conversionWarnings } = this.convertDeclarations(
+        declarations,
+        specificityWithPseudo,
+        sourceOrder
+      );
+      
       const pseudoVariants = parsed.pseudos || [];
       const allVariants = normalizeVariantOrder([...pseudoVariants, ...additionalVariants]);
       
       const utilitiesForSelector = utilities.map(u => ({
-        value: u.value,
+        ...u,
         variants: allVariants
       }));
 
@@ -183,9 +219,10 @@ export class CSSParser {
 
       cssRules.push(cssRule);
       allConversionResults.push(conversionResults);
+      allConversionWarnings.push(...conversionWarnings);
     }
 
-    return { cssRules, conversionResults: allConversionResults, conversionWarnings };
+    return { cssRules, conversionResults: allConversionResults, conversionWarnings: allConversionWarnings };
   }
 
   private processDescendantRule(
@@ -220,10 +257,22 @@ export class CSSParser {
       return null;
     }
 
-    const { utilities, conversionResults, conversionWarnings } = this.convertDeclarations(declarations);
+    const sourceOrder = this.getNextSourceOrder();
+    const specificity = calculateDescendantSpecificity(
+      parsed.parent.type,
+      parsed.parent.name,
+      parsed.target.type,
+      parsed.target.name
+    );
+
+    const { utilities, conversionResults, conversionWarnings } = this.convertDeclarations(
+      declarations,
+      specificity,
+      sourceOrder
+    );
     
     const utilitiesWithVariants = utilities.map(u => ({
-      value: u.value,
+      ...u,
       variants: normalizeVariantOrder([...u.variants, ...additionalVariants])
     }));
 
@@ -254,6 +303,7 @@ export class CSSParser {
   }
 
   async parse(css: string, filePath: string): Promise<CSSParseResult> {
+    this.resetSourceOrder();
     const rules: CSSRule[] = [];
     const warnings: string[] = [];
     let hasChanges = false;

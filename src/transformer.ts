@@ -14,6 +14,13 @@ import {
   normalizeVariantOrder 
 } from './utils/variantAssembler';
 import { transformDescendantSelectors } from './jsxDescendantTransformer';
+import { 
+  UtilityWithMeta, 
+  ResolvedUtility, 
+  resolveConflicts, 
+  resolvedUtilitiesToStrings 
+} from './utils/conflictResolver';
+import { Specificity, ZERO_SPECIFICITY } from './utils/specificityCalculator';
 
 export interface TransformOptions {
   dryRun: boolean;
@@ -34,7 +41,7 @@ export interface TransformResults {
 }
 
 interface ClassInfo {
-  utilities: Array<{ value: string; variants: string[] }>;
+  utilities: UtilityWithMeta[];
   sourceFile: string;
   fullyConvertible: boolean;
 }
@@ -324,7 +331,11 @@ function buildClassInfoFromRule(rule: CSSRule, sourceFile: string): ClassInfo {
   return {
     utilities: rule.utilities.map(u => ({
       value: u.value,
-      variants: normalizeVariantOrder([...u.variants])
+      variants: normalizeVariantOrder([...u.variants]),
+      cssProperty: u.cssProperty,
+      specificity: u.specificity,
+      sourceOrder: u.sourceOrder,
+      originalSelector: rule.selector
     })),
     sourceFile,
     fullyConvertible: true
@@ -333,26 +344,22 @@ function buildClassInfoFromRule(rule: CSSRule, sourceFile: string): ClassInfo {
 
 function mergeRuleIntoClassInfo(info: ClassInfo, rule: CSSRule): void {
   for (const utility of rule.utilities) {
-    const existing = info.utilities.find(u => u.value === utility.value);
-    if (existing) {
-      for (const variant of utility.variants) {
-        if (!existing.variants.includes(variant)) {
-          existing.variants.push(variant);
-        }
-      }
-      existing.variants = normalizeVariantOrder(existing.variants);
-    } else {
-      info.utilities.push({
-        value: utility.value,
-        variants: normalizeVariantOrder([...utility.variants])
-      });
-    }
+    const utilityWithMeta: UtilityWithMeta = {
+      value: utility.value,
+      variants: normalizeVariantOrder([...utility.variants]),
+      cssProperty: utility.cssProperty,
+      specificity: utility.specificity,
+      sourceOrder: utility.sourceOrder,
+      originalSelector: rule.selector
+    };
+    
+    info.utilities.push(utilityWithMeta);
   }
 }
 
 function assembleTailwindClasses(info: ClassInfo): string {
-  const merged = mergeUtilities(info.utilities);
-  return assembleUtilities(merged).join(' ');
+  const { resolved } = resolveConflicts(info.utilities, false);
+  return resolvedUtilitiesToStrings(resolved).join(' ');
 }
 
 function replaceClassNameReferences(

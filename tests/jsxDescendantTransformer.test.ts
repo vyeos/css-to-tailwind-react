@@ -1,5 +1,9 @@
 import { transformDescendantSelectors } from '../src/jsxDescendantTransformer';
-import { CSSRule } from '../src/cssParser';
+import { CSSRule, UtilityWithVariant } from '../src/cssParser';
+import { Specificity } from '../src/utils/specificityCalculator';
+import { getPropertyForUtility } from '../src/utils/propertyMapper';
+
+const DEFAULT_SPECIFICITY: Specificity = { inline: 0, id: 0, class: 1, element: 0 };
 
 function createDescendantRule(
   parentType: 'class' | 'element',
@@ -8,14 +12,23 @@ function createDescendantRule(
   targetName: string,
   utilities: Array<{ value: string; variants: string[] }>
 ): CSSRule {
+  let sourceOrder = 0;
+  const utilitiesWithMeta: UtilityWithVariant[] = utilities.map(u => ({
+    value: u.value,
+    variants: u.variants,
+    cssProperty: getPropertyForUtility(u.value),
+    specificity: DEFAULT_SPECIFICITY,
+    sourceOrder: ++sourceOrder
+  }));
+  
   return {
     selector: '',
     className: parentType === 'class' ? parentName : '',
     declarations: [],
-    convertedClasses: utilities.map(u => 
+    convertedClasses: utilitiesWithMeta.map(u => 
       u.variants.length > 0 ? `${u.variants.join(':')}:${u.value}` : u.value
     ),
-    utilities,
+    utilities: utilitiesWithMeta,
     skipped: false,
     fullyConverted: true,
     partialConversion: false,
@@ -44,7 +57,8 @@ describe('jsxDescendantTransformer', () => {
       
       expect(result.hasChanges).toBe(true);
       expect(result.transformations).toBe(1);
-      expect(result.code).toContain('className="text-3xl font-bold"');
+      expect(result.code).toContain('text-3xl');
+      expect(result.code).toContain('font-bold');
     });
 
     it('should apply classes to img inside .card', () => {
@@ -351,7 +365,13 @@ describe('jsxDescendantTransformer', () => {
           className: 'title',
           declarations: [],
           convertedClasses: ['text-3xl'],
-          utilities: [{ value: 'text-3xl', variants: [] }],
+          utilities: [{ 
+            value: 'text-3xl', 
+            variants: [], 
+            cssProperty: getPropertyForUtility('text-3xl'), 
+            specificity: DEFAULT_SPECIFICITY, 
+            sourceOrder: 1 
+          }],
           skipped: false,
           fullyConverted: true,
           partialConversion: false,

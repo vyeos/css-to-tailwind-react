@@ -2,8 +2,14 @@ import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
 import generate from '@babel/generator';
 import * as t from '@babel/types';
-import { CSSRule, SelectorTarget } from './cssParser';
+import { CSSRule, SelectorTarget, UtilityWithVariant } from './cssParser';
 import { assembleUtilities } from './utils/variantAssembler';
+import { 
+  UtilityWithMeta, 
+  ResolvedUtility, 
+  resolveConflicts, 
+  resolvedUtilitiesToStrings 
+} from './utils/conflictResolver';
 import { logger } from './utils/logger';
 
 export interface DescendantTransformResult {
@@ -16,7 +22,8 @@ export interface DescendantTransformResult {
 interface DescendantRule {
   parentSelector: SelectorTarget;
   targetSelector: SelectorTarget;
-  utilities: Array<{ value: string; variants: string[] }>;
+  utilities: UtilityWithVariant[];
+  selector: string;
 }
 
 function isReactComponent(name: string): boolean {
@@ -219,7 +226,8 @@ export function transformDescendantSelectors(
         descendantRules.push({
           parentSelector: rule.parentSelector,
           targetSelector: rule.targetSelector,
-          utilities: rule.utilities
+          utilities: rule.utilities,
+          selector: rule.selector
         });
       }
     }
@@ -314,7 +322,17 @@ function applyToDescendants(
   rule: DescendantRule
 ): number {
   let appliedCount = 0;
-  const newClasses = assembleUtilities(rule.utilities);
+  const utilitiesWithMeta: UtilityWithMeta[] = rule.utilities.map(u => ({
+    value: u.value,
+    variants: u.variants,
+    cssProperty: u.cssProperty,
+    specificity: u.specificity,
+    sourceOrder: u.sourceOrder,
+    originalSelector: rule.selector
+  }));
+  
+  const { resolved } = resolveConflicts(utilitiesWithMeta, false);
+  const newClasses = resolvedUtilitiesToStrings(resolved);
   
   const parentNode = parentPath.node;
   
@@ -378,7 +396,8 @@ export function groupDescendantRulesByParent(rules: CSSRule[]): Map<string, Desc
       grouped.get(parentKey)!.push({
         parentSelector: rule.parentSelector,
         targetSelector: rule.targetSelector,
-        utilities: rule.utilities
+        utilities: rule.utilities,
+        selector: rule.selector
       });
     }
   }
