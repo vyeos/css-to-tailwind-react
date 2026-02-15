@@ -413,6 +413,34 @@ export class TailwindMapper {
       return this.convertZIndex(normalizedValue);
     }
 
+    if (normalizedProp === 'grid-template-columns') {
+      return this.convertGridTemplateColumns(normalizedValue);
+    }
+
+    if (normalizedProp === 'grid-template-rows') {
+      return this.convertGridTemplateRows(normalizedValue);
+    }
+
+    if (normalizedProp === 'grid-column') {
+      return this.convertGridColumn(normalizedValue);
+    }
+
+    if (normalizedProp === 'grid-row') {
+      return this.convertGridRow(normalizedValue);
+    }
+
+    if (normalizedProp === 'place-items') {
+      return this.convertPlaceItems(normalizedValue);
+    }
+
+    if (normalizedProp === 'place-content') {
+      return this.convertPlaceContent(normalizedValue);
+    }
+
+    if (normalizedProp === 'place-self') {
+      return this.convertPlaceSelf(normalizedValue);
+    }
+
     return {
       className: null,
       skipped: true,
@@ -470,6 +498,12 @@ export class TailwindMapper {
       return { classes, warnings, cssProperties };
     }
 
+    if (value.startsWith('var(')) {
+      classes.push(`bg-[${value}]`);
+      cssProperties.push('background-color');
+      return { classes, warnings, cssProperties };
+    }
+
     const colorValue = this.extractColorFromBackground(value);
     
     if (colorValue) {
@@ -478,6 +512,8 @@ export class TailwindMapper {
       } else if (colorValue.startsWith('rgb')) {
         classes.push(`bg-[${colorValue}]`);
       } else if (colorValue.startsWith('hsl')) {
+        classes.push(`bg-[${colorValue}]`);
+      } else if (colorValue.startsWith('var(')) {
         classes.push(`bg-[${colorValue}]`);
       } else {
         const colorMap: Record<string, string> = {
@@ -1456,6 +1492,8 @@ export class TailwindMapper {
         classes.push(`border-[${color}]`);
       } else if (color.startsWith('rgb')) {
         classes.push(`border-[${color}]`);
+      } else if (color.startsWith('var(')) {
+        classes.push(`border-[${color}]`);
       } else {
         const colorMap: Record<string, string> = {
           'transparent': 'border-transparent',
@@ -1504,6 +1542,8 @@ export class TailwindMapper {
         width = token;
       } else if (['solid', 'dashed', 'dotted', 'double', 'hidden', 'none'].includes(token)) {
         style = token;
+      } else if (token.startsWith('var(')) {
+        color = token;
       } else {
         color = token;
       }
@@ -1534,6 +1574,8 @@ export class TailwindMapper {
       if (color.startsWith('#')) {
         classes.push(`${side.prefix}-[${color}]`);
       } else if (color.startsWith('rgb')) {
+        classes.push(`${side.prefix}-[${color}]`);
+      } else if (color.startsWith('var(')) {
         classes.push(`${side.prefix}-[${color}]`);
       } else {
         classes.push(`${side.prefix}-${color}`);
@@ -1685,6 +1727,176 @@ export class TailwindMapper {
     }
 
     return { className: `z-[${value}]`, skipped: false };
+  }
+
+  private convertGridTemplateColumns(value: string): ConversionResult {
+    const commonGrids: Record<string, string> = {
+      '1fr 1fr': 'grid-cols-2',
+      '1fr 1fr 1fr': 'grid-cols-3',
+      '1fr 1fr 1fr 1fr': 'grid-cols-4',
+      'repeat(1, 1fr)': 'grid-cols-1',
+      'repeat(2, 1fr)': 'grid-cols-2',
+      'repeat(3, 1fr)': 'grid-cols-3',
+      'repeat(4, 1fr)': 'grid-cols-4',
+      'repeat(5, 1fr)': 'grid-cols-5',
+      'repeat(6, 1fr)': 'grid-cols-6',
+      'repeat(12, 1fr)': 'grid-cols-12',
+      'none': 'grid-cols-none'
+    };
+
+    if (commonGrids[value]) {
+      return { className: commonGrids[value], skipped: false };
+    }
+
+    const repeatMatch = value.match(/^repeat\((\d+),\s*1fr\)$/);
+    if (repeatMatch) {
+      return { className: `grid-cols-${repeatMatch[1]}`, skipped: false };
+    }
+
+    const frOnlyMatch = value.match(/^(\d+)fr$/);
+    if (frOnlyMatch) {
+      return { className: `grid-cols-${frOnlyMatch[1]}`, skipped: false };
+    }
+
+    return { className: `grid-cols-[${value}]`, skipped: false };
+  }
+
+  private convertGridTemplateRows(value: string): ConversionResult {
+    const commonGrids: Record<string, string> = {
+      '1fr 1fr': 'grid-rows-2',
+      '1fr 1fr 1fr': 'grid-rows-3',
+      'repeat(1, 1fr)': 'grid-rows-1',
+      'repeat(2, 1fr)': 'grid-rows-2',
+      'repeat(3, 1fr)': 'grid-rows-3',
+      'repeat(4, 1fr)': 'grid-rows-4',
+      'repeat(5, 1fr)': 'grid-rows-5',
+      'repeat(6, 1fr)': 'grid-rows-6',
+      'none': 'grid-rows-none'
+    };
+
+    if (commonGrids[value]) {
+      return { className: commonGrids[value], skipped: false };
+    }
+
+    const repeatMatch = value.match(/^repeat\((\d+),\s*1fr\)$/);
+    if (repeatMatch) {
+      return { className: `grid-rows-${repeatMatch[1]}`, skipped: false };
+    }
+
+    return { className: `grid-rows-[${value}]`, skipped: false };
+  }
+
+  private convertGridColumn(value: string): ConversionResult {
+    const spanMap: Record<string, string> = {
+      'span 1': 'col-span-1',
+      'span 2': 'col-span-2',
+      'span 3': 'col-span-3',
+      'span 4': 'col-span-4',
+      'span 5': 'col-span-5',
+      'span 6': 'col-span-6',
+      'span 7': 'col-span-7',
+      'span 8': 'col-span-8',
+      'span 9': 'col-span-9',
+      'span 10': 'col-span-10',
+      'span 11': 'col-span-11',
+      'span 12': 'col-span-12',
+      'span full': 'col-span-full',
+      '1 / -1': 'col-span-full',
+      'auto': 'col-auto'
+    };
+
+    if (spanMap[value]) {
+      return { className: spanMap[value], skipped: false };
+    }
+
+    const spanMatch = value.match(/^span\s+(\d+)$/);
+    if (spanMatch) {
+      return { className: `col-span-${spanMatch[1]}`, skipped: false };
+    }
+
+    if (/^\d+\s*\/\s*-?\d+$/.test(value)) {
+      return { className: `col-[${value}]`, skipped: false };
+    }
+
+    return { className: `col-[${value}]`, skipped: false };
+  }
+
+  private convertGridRow(value: string): ConversionResult {
+    const spanMap: Record<string, string> = {
+      'span 1': 'row-span-1',
+      'span 2': 'row-span-2',
+      'span 3': 'row-span-3',
+      'span 4': 'row-span-4',
+      'span 5': 'row-span-5',
+      'span 6': 'row-span-6',
+      'span full': 'row-span-full',
+      '1 / -1': 'row-span-full',
+      'auto': 'row-auto'
+    };
+
+    if (spanMap[value]) {
+      return { className: spanMap[value], skipped: false };
+    }
+
+    const spanMatch = value.match(/^span\s+(\d+)$/);
+    if (spanMatch) {
+      return { className: `row-span-${spanMatch[1]}`, skipped: false };
+    }
+
+    if (/^\d+\s*\/\s*-?\d+$/.test(value)) {
+      return { className: `row-[${value}]`, skipped: false };
+    }
+
+    return { className: `row-[${value}]`, skipped: false };
+  }
+
+  private convertPlaceItems(value: string): ConversionResult {
+    const placeItemsMap: Record<string, string> = {
+      'start': 'place-items-start',
+      'end': 'place-items-end',
+      'center': 'place-items-center',
+      'stretch': 'place-items-stretch'
+    };
+
+    if (placeItemsMap[value]) {
+      return { className: placeItemsMap[value], skipped: false };
+    }
+
+    return { className: `place-items-[${value}]`, skipped: false };
+  }
+
+  private convertPlaceContent(value: string): ConversionResult {
+    const placeContentMap: Record<string, string> = {
+      'start': 'place-content-start',
+      'end': 'place-content-end',
+      'center': 'place-content-center',
+      'stretch': 'place-content-stretch',
+      'between': 'place-content-between',
+      'around': 'place-content-around',
+      'evenly': 'place-content-evenly'
+    };
+
+    if (placeContentMap[value]) {
+      return { className: placeContentMap[value], skipped: false };
+    }
+
+    return { className: `place-content-[${value}]`, skipped: false };
+  }
+
+  private convertPlaceSelf(value: string): ConversionResult {
+    const placeSelfMap: Record<string, string> = {
+      'auto': 'place-self-auto',
+      'start': 'place-self-start',
+      'end': 'place-self-end',
+      'center': 'place-self-center',
+      'stretch': 'place-self-stretch'
+    };
+
+    if (placeSelfMap[value]) {
+      return { className: placeSelfMap[value], skipped: false };
+    }
+
+    return { className: `place-self-[${value}]`, skipped: false };
   }
 
   convertMultiple(properties: CSSProperty[]): { classes: string[]; warnings: string[] } {

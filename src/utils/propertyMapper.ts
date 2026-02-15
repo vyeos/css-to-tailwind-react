@@ -65,7 +65,14 @@ const PROPERTY_PREFIX_MAP: Record<string, string[]> = {
   'flex-grow': ['grow-', 'grow'],
   'flex-shrink': ['shrink-', 'shrink'],
   'flex-basis': ['basis-'],
-  'word-break': ['break-normal', 'break-all', 'break-words', 'break-keep']
+  'word-break': ['break-normal', 'break-all', 'break-words', 'break-keep'],
+  'grid-template-columns': ['grid-cols-'],
+  'grid-template-rows': ['grid-rows-'],
+  'grid-column': ['col-span-', 'col-start-', 'col-end-', 'col-'],
+  'grid-row': ['row-span-', 'row-start-', 'row-end-', 'row-'],
+  'place-items': ['place-items-'],
+  'place-content': ['place-content-'],
+  'place-self': ['place-self-']
 };
 
 const UTILITY_TO_PROPERTY_MAP: Record<string, string> = {
@@ -211,7 +218,20 @@ const PREFIX_PROPERTY_MAP: Record<string, string> = {
   'object-': 'object-position',
   'basis-': 'flex-basis',
   'grow-': 'flex-grow',
-  'shrink-': 'flex-shrink'
+  'shrink-': 'flex-shrink',
+  'grid-cols-': 'grid-template-columns',
+  'grid-rows-': 'grid-template-rows',
+  'col-span-': 'grid-column',
+  'col-start-': 'grid-column',
+  'col-end-': 'grid-column',
+  'col-': 'grid-column',
+  'row-span-': 'grid-row',
+  'row-start-': 'grid-row',
+  'row-end-': 'grid-row',
+  'row-': 'grid-row',
+  'place-items-': 'place-items',
+  'place-content-': 'place-content',
+  'place-self-': 'place-self'
 };
 
 const FONT_SIZE_UTILITIES = new Set([
@@ -264,6 +284,22 @@ export function getPropertyForUtility(utility: string): string {
 
   if (strippedUtility.startsWith('tracking-') && !LETTER_SPACING_UTILITIES.has(strippedUtility)) {
     return 'letter-spacing';
+  }
+  
+  if (/^border-[trbl]-\[/.test(strippedUtility)) {
+    const value = strippedUtility.match(/^border-[trbl]-\[(.+)\]$/)?.[1] || '';
+    if (value.startsWith('#') || value.startsWith('rgb') || value.startsWith('hsl') || 
+        value.startsWith('var(') || /^[a-z]/i.test(value)) {
+      return 'border-color';
+    }
+  }
+  
+  if (strippedUtility.startsWith('border-') && strippedUtility.includes('[')) {
+    const value = strippedUtility.match(/^border-\[(.+)\]$/)?.[1] || '';
+    if (value.startsWith('#') || value.startsWith('rgb') || value.startsWith('hsl') || 
+        value.startsWith('var(') || /^[a-z]/i.test(value)) {
+      return 'border-color';
+    }
   }
   
   const sortedPrefixes = Object.keys(PREFIX_PROPERTY_MAP).sort((a, b) => b.length - a.length);
@@ -368,7 +404,14 @@ export const PROPERTY_CONFLICT_GROUPS: Record<string, string[]> = {
   'aspect-ratio': ['aspect-ratio'],
   'object-fit': ['object-fit'],
   'object-position': ['object-position'],
-  'word-break': ['word-break']
+  'word-break': ['word-break'],
+  'grid-template-columns': ['grid-template-columns'],
+  'grid-template-rows': ['grid-template-rows'],
+  'grid-column': ['grid-column', 'grid-column-start', 'grid-column-end'],
+  'grid-row': ['grid-row', 'grid-row-start', 'grid-row-end'],
+  'place-items': ['place-items'],
+  'place-content': ['place-content'],
+  'place-self': ['place-self']
 };
 
 export function getConflictGroup(property: string): string | null {

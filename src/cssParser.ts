@@ -212,26 +212,59 @@ export class CSSParser {
         variants
       );
       
+      let convertedInThisBlock = false;
+      
       if (valueToConvert.hasUnresolved) {
-        conversionResults.push({
-          declaration: decl,
-          converted: false,
-          className: null,
-          resolvedValue: valueToConvert.resolvedValue
-        });
-        conversionWarnings.push(`Could not fully resolve var() in: ${decl.property}: ${decl.value}`);
+        const multiResult = this.mapper.convertPropertyWithMultiple(decl.property, valueToConvert.resolvedValue || decl.value);
+        
+        if (multiResult.classes.length > 0) {
+          multiResult.classes.forEach((className) => {
+            conversionResults.push({
+              declaration: decl,
+              converted: true,
+              className,
+              resolvedValue: valueToConvert.resolvedValue || decl.value
+            });
+          });
+          multiResult.warnings.forEach(w => conversionWarnings.push(w));
+          convertedInThisBlock = true;
+        }
+        
+        if (!convertedInThisBlock) {
+          conversionResults.push({
+            declaration: decl,
+            converted: false,
+            className: null,
+            resolvedValue: valueToConvert.resolvedValue
+          });
+          conversionWarnings.push(`Could not fully resolve var() in: ${decl.property}: ${decl.value}`);
+        }
         return;
       }
       
-      const result = this.mapper.convertProperty(decl.property, valueToConvert.resolvedValue);
-      conversionResults.push({
-        declaration: decl,
-        converted: !result.skipped && result.className !== null,
-        className: result.className,
-        resolvedValue: valueToConvert.resolvedValue
-      });
-      if (result.skipped && result.reason) {
-        conversionWarnings.push(result.reason);
+      const multiResult = this.mapper.convertPropertyWithMultiple(decl.property, valueToConvert.resolvedValue);
+      
+      if (multiResult.classes.length > 0) {
+        multiResult.classes.forEach((className) => {
+          conversionResults.push({
+            declaration: decl,
+            converted: true,
+            className,
+            resolvedValue: valueToConvert.resolvedValue
+          });
+        });
+        multiResult.warnings.forEach(w => conversionWarnings.push(w));
+      } else {
+        const result = this.mapper.convertProperty(decl.property, valueToConvert.resolvedValue);
+        conversionResults.push({
+          declaration: decl,
+          converted: !result.skipped && result.className !== null,
+          className: result.className,
+          resolvedValue: valueToConvert.resolvedValue
+        });
+        if (result.skipped && result.reason) {
+          conversionWarnings.push(result.reason);
+        }
       }
     });
 

@@ -105,17 +105,19 @@ export async function transformFiles(
               allDescendantRules.push(rule);
               results.stylesConverted += rule.declarations.length;
             }
-          } else if (rule.fullyConverted && rule.className) {
+          } else if (rule.className && rule.convertedClasses.length > 0) {
             const existing = cssClassMap[rule.className];
             if (existing) {
               mergeRuleIntoClassInfo(existing, rule);
             } else {
               cssClassMap[rule.className] = buildClassInfoFromRule(rule, file.path);
             }
-            results.stylesConverted += rule.declarations.length;
-          } else if (rule.partialConversion) {
-            results.stylesConverted += rule.convertedClasses.length;
-            logger.verbose(`  Rule .${rule.className}: partial conversion (${rule.convertedClasses.length}/${rule.declarations.length} declarations)`);
+            if (rule.fullyConverted) {
+              results.stylesConverted += rule.declarations.length;
+            } else {
+              results.stylesConverted += rule.convertedClasses.length;
+              logger.verbose(`  Rule .${rule.className}: partial conversion (${rule.convertedClasses.length}/${rule.declarations.length} declarations)`);
+            }
           }
         });
 
@@ -340,7 +342,7 @@ function buildClassInfoFromRule(rule: CSSRule, sourceFile: string): ClassInfo {
       originalSelector: rule.selector
     })),
     sourceFile,
-    fullyConvertible: true
+    fullyConvertible: rule.fullyConverted
   };
 }
 
@@ -377,34 +379,62 @@ function replaceClassNameReferences(
   let modifiedCode = code;
 
   Object.entries(classMap).forEach(([oldClass, info]) => {
-    if (!info.fullyConvertible) {
+    if (info.utilities.length === 0) {
       return;
     }
 
     const tailwindClassString = assembleTailwindClasses(info);
     
-    const pattern1 = new RegExp(`className="${oldClass}"`, 'g');
-    if (pattern1.test(modifiedCode)) {
-      modifiedCode = modifiedCode.replace(pattern1, `className="${tailwindClassString}"`);
-      hasChanges = true;
-      replacements++;
-      logger.verbose(`Replaced className="${oldClass}" with "${tailwindClassString}"`);
-    }
+    if (info.fullyConvertible) {
+      const pattern1 = new RegExp(`className="${oldClass}"`, 'g');
+      if (pattern1.test(modifiedCode)) {
+        modifiedCode = modifiedCode.replace(pattern1, `className="${tailwindClassString}"`);
+        hasChanges = true;
+        replacements++;
+        logger.verbose(`Replaced className="${oldClass}" with "${tailwindClassString}"`);
+      }
 
-    const pattern2 = new RegExp(`className=\\{"${oldClass}"\\}`, 'g');
-    if (pattern2.test(modifiedCode)) {
-      modifiedCode = modifiedCode.replace(pattern2, `className="${tailwindClassString}"`);
-      hasChanges = true;
-      replacements++;
-      logger.verbose(`Replaced className={"${oldClass}"} with "${tailwindClassString}"`);
-    }
+      const pattern2 = new RegExp(`className=\\{"${oldClass}"\\}`, 'g');
+      if (pattern2.test(modifiedCode)) {
+        modifiedCode = modifiedCode.replace(pattern2, `className="${tailwindClassString}"`);
+        hasChanges = true;
+        replacements++;
+        logger.verbose(`Replaced className={"${oldClass}"} with "${tailwindClassString}"`);
+      }
 
-    const pattern3 = new RegExp(`className=\\{\`\\s*${oldClass}\\s*\`\\}`, 'g');
-    if (pattern3.test(modifiedCode)) {
-      modifiedCode = modifiedCode.replace(pattern3, `className="${tailwindClassString}"`);
-      hasChanges = true;
-      replacements++;
-      logger.verbose(`Replaced className={\`${oldClass}\`} with "${tailwindClassString}"`);
+      const pattern3 = new RegExp(`className=\\{\`\\s*${oldClass}\\s*\`\\}`, 'g');
+      if (pattern3.test(modifiedCode)) {
+        modifiedCode = modifiedCode.replace(pattern3, `className="${tailwindClassString}"`);
+        hasChanges = true;
+        replacements++;
+        logger.verbose(`Replaced className={\`${oldClass}\`} with "${tailwindClassString}"`);
+      }
+    } else {
+      const combinedClassString = `${oldClass} ${tailwindClassString}`;
+      
+      const pattern1 = new RegExp(`className="${oldClass}"`, 'g');
+      if (pattern1.test(modifiedCode)) {
+        modifiedCode = modifiedCode.replace(pattern1, `className="${combinedClassString}"`);
+        hasChanges = true;
+        replacements++;
+        logger.verbose(`Appended to className="${oldClass}" → "${combinedClassString}"`);
+      }
+
+      const pattern2 = new RegExp(`className=\\{"${oldClass}"\\}`, 'g');
+      if (pattern2.test(modifiedCode)) {
+        modifiedCode = modifiedCode.replace(pattern2, `className="${combinedClassString}"`);
+        hasChanges = true;
+        replacements++;
+        logger.verbose(`Appended to className={"${oldClass}"} → "${combinedClassString}"`);
+      }
+
+      const pattern3 = new RegExp(`className=\\{\`\\s*${oldClass}\\s*\`\\}`, 'g');
+      if (pattern3.test(modifiedCode)) {
+        modifiedCode = modifiedCode.replace(pattern3, `className="${combinedClassString}"`);
+        hasChanges = true;
+        replacements++;
+        logger.verbose(`Appended to className={\`${oldClass}\`} → "${combinedClassString}"`);
+      }
     }
   });
 
