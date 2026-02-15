@@ -9,6 +9,8 @@ export interface CSSRule {
   declarations: CSSProperty[];
   convertedClasses: string[];
   skipped: boolean;
+  fullyConverted: boolean; // NEW: true if ALL declarations in this rule were converted
+  partialConversion: boolean; // NEW: true if SOME but not all declarations were converted
   reason?: string;
 }
 
@@ -92,25 +94,74 @@ export class CSSParser {
           return;
         }
 
-        // Convert to Tailwind classes
-        const { classes, warnings: conversionWarnings } = this.mapper.convertMultiple(declarations);
+        // Convert to Tailwind classes - track which specific declarations were converted
+        const conversionResults: Array<{
+          declaration: CSSProperty;
+          converted: boolean;
+          className: string | null;
+        }> = [];
+        const conversionWarnings: string[] = [];
+
+        declarations.forEach(decl => {
+          const result = this.mapper.convertProperty(decl.property, decl.value);
+          conversionResults.push({
+            declaration: decl,
+            converted: !result.skipped && result.className !== null,
+            className: result.className
+          });
+          if (result.skipped && result.reason) {
+            conversionWarnings.push(result.reason);
+          }
+        });
+
+        const convertedClasses = conversionResults
+          .filter(r => r.converted && r.className)
+          .map(r => r.className!);
+        
+        const allDeclarationsConverted = conversionResults.every(r => r.converted);
+        const someDeclarationsConverted = convertedClasses.length > 0;
 
         const cssRule: CSSRule = {
           selector: rule.selector,
           className,
           declarations,
-          convertedClasses: classes,
-          skipped: classes.length === 0,
-          reason: classes.length === 0 ? 'No convertible declarations' : undefined
+          convertedClasses,
+          skipped: !someDeclarationsConverted,
+          fullyConverted: allDeclarationsConverted,
+          partialConversion: someDeclarationsConverted && !allDeclarationsConverted,
+          reason: !someDeclarationsConverted ? 'No convertible declarations' : undefined
         };
 
         rules.push(cssRule);
         warnings.push(...conversionWarnings);
 
-        if (classes.length > 0) {
+        // CRITICAL FIX: Only remove declarations that were successfully converted
+        // Never remove the entire rule unless ALL declarations are converted
+        if (someDeclarationsConverted) {
           hasChanges = true;
-          // Remove the rule from AST
-          rule.remove();
+          
+          if (allDeclarationsConverted) {
+            // All declarations converted - safe to remove entire rule
+            rule.remove();
+            logger.verbose(`Removed rule .${className} (all ${declarations.length} declarations converted)`);
+          } else {
+            // Partial conversion - only remove the converted declarations
+            let removedCount = 0;
+            rule.walkDecls((decl) => {
+              const wasConverted = conversionResults.some(r => 
+                r.converted && 
+                r.declaration.property === decl.prop && 
+                r.declaration.value === decl.value
+              );
+              
+              if (wasConverted) {
+                decl.remove();
+                removedCount++;
+              }
+            });
+            
+            logger.verbose(`Partial conversion of .${className}: removed ${removedCount}/${declarations.length} declarations`);
+          }
         }
       });
 
