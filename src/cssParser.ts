@@ -2,15 +2,30 @@ import postcss, { Root, Rule, Declaration, AtRule } from 'postcss';
 import safeParser from 'postcss-safe-parser';
 import { TailwindMapper, CSSProperty } from './tailwindMapper';
 import { logger } from './utils/logger';
+import { 
+  Breakpoint, 
+  getBreakpoints, 
+  resolveBreakpointsFromConfig,
+  processMediaQuery, 
+  prefixWithBreakpoint,
+  clearBreakpointCache 
+} from './utils/breakpointResolver';
+
+export interface UtilityWithVariant {
+  value: string;
+  variant?: string;
+}
 
 export interface CSSRule {
   selector: string;
   className: string;
   declarations: CSSProperty[];
   convertedClasses: string[];
+  utilities: UtilityWithVariant[];
+  breakpoint?: string;
   skipped: boolean;
-  fullyConverted: boolean; // NEW: true if ALL declarations in this rule were converted
-  partialConversion: boolean; // NEW: true if SOME but not all declarations were converted
+  fullyConverted: boolean;
+  partialConversion: boolean;
   reason?: string;
 }
 
@@ -28,9 +43,97 @@ export interface CSSUsageMap {
 
 export class CSSParser {
   private mapper: TailwindMapper;
+  private breakpoints: Breakpoint[];
 
-  constructor(mapper: TailwindMapper) {
+  constructor(mapper: TailwindMapper, screens?: Record<string, string | [string, string]>) {
     this.mapper = mapper;
+    this.breakpoints = screens 
+      ? resolveBreakpointsFromConfig(screens) 
+      : getBreakpoints();
+  }
+
+  private processRule(
+    rule: Rule,
+    breakpoint?: string
+  ): { cssRule: CSSRule; conversionResults: Array<{ declaration: CSSProperty; converted: boolean; className: string | null }>; conversionWarnings: string[] } | null {
+    if (rule.selector.includes(':')) {
+      return null;
+    }
+
+    const classNameMatch = rule.selector.match(/^\.([a-zA-Z_-][a-zA-Z0-9_-]*)$/);
+    if (!classNameMatch) {
+      return null;
+    }
+
+    const className = classNameMatch[1];
+    const declarations: CSSProperty[] = [];
+
+    rule.walkDecls((decl) => {
+      if (decl.prop.startsWith('--')) {
+        return;
+      }
+
+      if (decl.value.includes('calc(')) {
+        return;
+      }
+
+      declarations.push({
+        property: decl.prop,
+        value: decl.value
+      });
+    });
+
+    if (declarations.length === 0) {
+      return null;
+    }
+
+    const conversionResults: Array<{
+      declaration: CSSProperty;
+      converted: boolean;
+      className: string | null;
+    }> = [];
+    const conversionWarnings: string[] = [];
+
+    declarations.forEach(decl => {
+      const result = this.mapper.convertProperty(decl.property, decl.value);
+      conversionResults.push({
+        declaration: decl,
+        converted: !result.skipped && result.className !== null,
+        className: result.className
+      });
+      if (result.skipped && result.reason) {
+        conversionWarnings.push(result.reason);
+      }
+    });
+
+    const utilities: UtilityWithVariant[] = conversionResults
+      .filter(r => r.converted && r.className)
+      .map(r => ({
+        value: r.className!,
+        variant: breakpoint
+      }));
+
+    const convertedClasses = utilities.map(u => 
+      u.variant ? prefixWithBreakpoint(u.value, u.variant) : u.value
+    );
+
+    const allDeclarationsConverted = conversionResults.every(r => r.converted);
+    const someDeclarationsConverted = convertedClasses.length > 0;
+
+    const cssRule: CSSRule = {
+      selector: rule.selector,
+      className,
+      declarations,
+      convertedClasses,
+      utilities,
+      breakpoint,
+      skipped: !someDeclarationsConverted,
+      fullyConverted: allDeclarationsConverted,
+      partialConversion: someDeclarationsConverted && !allDeclarationsConverted,
+      reason: !someDeclarationsConverted ? 'No convertible declarations' : undefined
+    };
+
+    return { cssRule, conversionResults, conversionWarnings };
   }
 
   async parse(css: string, filePath: string): Promise<CSSParseResult> {
@@ -44,23 +147,70 @@ export class CSSParser {
         from: filePath
       }).then(result => result.root);
 
-      // Process each rule
-      root.walkRules((rule) => {
-        // Skip rules inside @media, @supports, etc.
-        if (rule.parent && rule.parent.type === 'atrule') {
-          warnings.push(`Skipped rule with at-rule parent: ${rule.selector}`);
-          logger.verbose(`Skipping at-rule: ${rule.selector}`);
+      root.walkAtRules((atRule) => {
+        if (atRule.name !== 'media') {
           return;
         }
 
-        // Skip pseudo-selectors
+        const mediaResult = processMediaQuery(atRule.params, this.breakpoints);
+
+        if (mediaResult.skipped) {
+          warnings.push(mediaResult.reason || `Skipped media query: ${atRule.params}`);
+          return;
+        }
+
+        const breakpoint = mediaResult.breakpoint!;
+
+        const nestedRules: Rule[] = [];
+        atRule.walkRules((rule) => {
+          nestedRules.push(rule);
+        });
+
+        for (const rule of nestedRules) {
+          const result = this.processRule(rule, breakpoint);
+          if (result) {
+            rules.push(result.cssRule);
+            warnings.push(...result.conversionWarnings);
+
+            if (result.cssRule.convertedClasses.length > 0) {
+              hasChanges = true;
+
+              if (result.cssRule.fullyConverted) {
+                rule.remove();
+                logger.verbose(`Removed rule .${result.cssRule.className} in @media (min-width) → ${breakpoint}`);
+              } else {
+                for (const cr of result.conversionResults) {
+                  if (cr.converted) {
+                    rule.walkDecls((decl) => {
+                      if (decl.prop === cr.declaration.property && decl.value === cr.declaration.value) {
+                        decl.remove();
+                      }
+                    });
+                  }
+                }
+                logger.verbose(`Partial conversion of .${result.cssRule.className} in @media → ${breakpoint}`);
+              }
+            }
+          }
+        }
+
+        if (atRule.nodes && atRule.nodes.length === 0) {
+          atRule.remove();
+          logger.verbose(`Removed empty @media rule`);
+        }
+      });
+
+      root.walkRules((rule) => {
+        if (rule.parent && rule.parent.type === 'atrule') {
+          return;
+        }
+
         if (rule.selector.includes(':')) {
           warnings.push(`Skipped pseudo-selector: ${rule.selector}`);
           logger.verbose(`Skipping pseudo-selector: ${rule.selector}`);
           return;
         }
 
-        // Only process simple class selectors
         const classNameMatch = rule.selector.match(/^\.([a-zA-Z_-][a-zA-Z0-9_-]*)$/);
         if (!classNameMatch) {
           warnings.push(`Skipped complex selector: ${rule.selector}`);
@@ -68,104 +218,41 @@ export class CSSParser {
           return;
         }
 
-        const className = classNameMatch[1];
-        const declarations: CSSProperty[] = [];
-
-        rule.walkDecls((decl) => {
-          // Skip CSS variables
-          if (decl.prop.startsWith('--')) {
-            warnings.push(`Skipped CSS variable: ${decl.prop}`);
-            return;
-          }
-
-          // Skip calc()
-          if (decl.value.includes('calc(')) {
-            warnings.push(`Skipped calc() value: ${decl.value}`);
-            return;
-          }
-
-          declarations.push({
-            property: decl.prop,
-            value: decl.value
-          });
-        });
-
-        if (declarations.length === 0) {
+        const result = this.processRule(rule);
+        if (!result) {
           return;
         }
 
-        // Convert to Tailwind classes - track which specific declarations were converted
-        const conversionResults: Array<{
-          declaration: CSSProperty;
-          converted: boolean;
-          className: string | null;
-        }> = [];
-        const conversionWarnings: string[] = [];
-
-        declarations.forEach(decl => {
-          const result = this.mapper.convertProperty(decl.property, decl.value);
-          conversionResults.push({
-            declaration: decl,
-            converted: !result.skipped && result.className !== null,
-            className: result.className
-          });
-          if (result.skipped && result.reason) {
-            conversionWarnings.push(result.reason);
-          }
-        });
-
-        const convertedClasses = conversionResults
-          .filter(r => r.converted && r.className)
-          .map(r => r.className!);
-        
-        const allDeclarationsConverted = conversionResults.every(r => r.converted);
-        const someDeclarationsConverted = convertedClasses.length > 0;
-
-        const cssRule: CSSRule = {
-          selector: rule.selector,
-          className,
-          declarations,
-          convertedClasses,
-          skipped: !someDeclarationsConverted,
-          fullyConverted: allDeclarationsConverted,
-          partialConversion: someDeclarationsConverted && !allDeclarationsConverted,
-          reason: !someDeclarationsConverted ? 'No convertible declarations' : undefined
-        };
-
+        const { cssRule, conversionResults, conversionWarnings } = result;
         rules.push(cssRule);
         warnings.push(...conversionWarnings);
 
-        // CRITICAL FIX: Only remove declarations that were successfully converted
-        // Never remove the entire rule unless ALL declarations are converted
-        if (someDeclarationsConverted) {
+        if (cssRule.convertedClasses.length > 0) {
           hasChanges = true;
-          
-          if (allDeclarationsConverted) {
-            // All declarations converted - safe to remove entire rule
+
+          if (cssRule.fullyConverted) {
             rule.remove();
-            logger.verbose(`Removed rule .${className} (all ${declarations.length} declarations converted)`);
+            logger.verbose(`Removed rule .${cssRule.className} (all ${cssRule.declarations.length} declarations converted)`);
           } else {
-            // Partial conversion - only remove the converted declarations
             let removedCount = 0;
             rule.walkDecls((decl) => {
-              const wasConverted = conversionResults.some(r => 
-                r.converted && 
-                r.declaration.property === decl.prop && 
+              const wasConverted = conversionResults.some(r =>
+                r.converted &&
+                r.declaration.property === decl.prop &&
                 r.declaration.value === decl.value
               );
-              
+
               if (wasConverted) {
                 decl.remove();
                 removedCount++;
               }
             });
-            
-            logger.verbose(`Partial conversion of .${className}: removed ${removedCount}/${declarations.length} declarations`);
+
+            logger.verbose(`Partial conversion of .${cssRule.className}: removed ${removedCount}/${cssRule.declarations.length} declarations`);
           }
         }
       });
 
-      // Clean up empty at-rules
       root.walkAtRules((atRule) => {
         if (atRule.nodes && atRule.nodes.length === 0) {
           atRule.remove();

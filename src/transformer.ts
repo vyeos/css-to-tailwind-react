@@ -3,10 +3,11 @@ import path from 'path';
 import { ScannedFile } from './scanner';
 import { TailwindMapper } from './tailwindMapper';
 import { JSXParser } from './jsxParser';
-import { CSSParser, CSSRule } from './cssParser';
+import { CSSParser, CSSRule, UtilityWithVariant } from './cssParser';
 import { FileWriter } from './fileWriter';
 import { TailwindConfig } from './utils/config';
 import { logger } from './utils/logger';
+import { clearBreakpointCache } from './utils/breakpointResolver';
 
 export interface TransformOptions {
   dryRun: boolean;
@@ -26,12 +27,15 @@ export interface TransformResults {
   warnings: number;
 }
 
+interface ClassInfo {
+  baseClasses: string[];
+  responsiveClasses: Map<string, string[]>;
+  sourceFile: string;
+  fullyConvertible: boolean;
+}
+
 interface CSSClassMap {
-  [className: string]: {
-    tailwindClasses: string[];
-    sourceFile: string;
-    fullyConvertible: boolean;
-  };
+  [className: string]: ClassInfo;
 }
 
 export async function transformFiles(
@@ -48,8 +52,11 @@ export async function transformFiles(
 
   const mapper = new TailwindMapper(options.tailwindConfig || {});
   const jsxParser = new JSXParser(mapper);
-  const cssParser = new CSSParser(mapper);
+  const screens = options.tailwindConfig?.theme?.screens;
+  const cssParser = new CSSParser(mapper, screens);
   const fileWriter = new FileWriter({ dryRun: options.dryRun });
+
+  clearBreakpointCache();
 
   // PASS 1: Analyze all files WITHOUT modifying anything
   // Collect CSS mappings and gather info about what can be safely converted
@@ -82,15 +89,14 @@ export async function transformFiles(
         // Build class map (only for fully converted classes - partial conversions keep the CSS)
         result.rules.forEach(rule => {
           if (rule.fullyConverted) {
-            cssClassMap[rule.className] = {
-              tailwindClasses: rule.convertedClasses,
-              sourceFile: file.path,
-              fullyConvertible: true
-            };
+            const existing = cssClassMap[rule.className];
+            if (existing) {
+              mergeRuleIntoClassInfo(existing, rule);
+            } else {
+              cssClassMap[rule.className] = buildClassInfoFromRule(rule, file.path);
+            }
             results.stylesConverted += rule.declarations.length;
           } else if (rule.partialConversion) {
-            // For partial conversions, we converted some declarations but keep the CSS rule
-            // Count the converted declarations
             results.stylesConverted += rule.convertedClasses.length;
             logger.verbose(`  Rule .${rule.className}: partial conversion (${rule.convertedClasses.length}/${rule.declarations.length} declarations)`);
           }
@@ -173,11 +179,12 @@ export async function transformFiles(
             // Build class map from internal styles
             internalResult.rules.forEach(rule => {
               if (rule.convertedClasses.length > 0) {
-                cssClassMap[rule.className] = {
-                  tailwindClasses: rule.convertedClasses,
-                  sourceFile: file.path,
-                  fullyConvertible: true
-                };
+                const existing = cssClassMap[rule.className];
+                if (existing) {
+                  mergeRuleIntoClassInfo(existing, rule);
+                } else {
+                  cssClassMap[rule.className] = buildClassInfoFromRule(rule, file.path);
+                }
                 results.stylesConverted += rule.declarations.length;
               }
             });
@@ -286,6 +293,60 @@ export async function transformFiles(
   return results;
 }
 
+function buildClassInfoFromRule(rule: CSSRule, sourceFile: string): ClassInfo {
+  const info: ClassInfo = {
+    baseClasses: [],
+    responsiveClasses: new Map(),
+    sourceFile,
+    fullyConvertible: true
+  };
+  
+  for (const utility of rule.utilities) {
+    if (utility.variant) {
+      const existing = info.responsiveClasses.get(utility.variant) || [];
+      existing.push(utility.value);
+      info.responsiveClasses.set(utility.variant, existing);
+    } else {
+      info.baseClasses.push(utility.value);
+    }
+  }
+  
+  return info;
+}
+
+function mergeRuleIntoClassInfo(info: ClassInfo, rule: CSSRule): void {
+  for (const utility of rule.utilities) {
+    if (utility.variant) {
+      const existing = info.responsiveClasses.get(utility.variant) || [];
+      if (!existing.includes(utility.value)) {
+        existing.push(utility.value);
+        info.responsiveClasses.set(utility.variant, existing);
+      }
+    } else {
+      if (!info.baseClasses.includes(utility.value)) {
+        info.baseClasses.push(utility.value);
+      }
+    }
+  }
+}
+
+function assembleTailwindClasses(info: ClassInfo): string {
+  const classes: string[] = [...info.baseClasses];
+  
+  const sortedBreakpoints = ['sm', 'md', 'lg', 'xl', '2xl'];
+  
+  for (const bp of sortedBreakpoints) {
+    const bpClasses = info.responsiveClasses.get(bp);
+    if (bpClasses) {
+      for (const cls of bpClasses) {
+        classes.push(`${bp}:${cls}`);
+      }
+    }
+  }
+  
+  return classes.join(' ');
+}
+
 function replaceClassNameReferences(
   code: string, 
   classMap: CSSClassMap
@@ -299,14 +360,12 @@ function replaceClassNameReferences(
   let modifiedCode = code;
 
   Object.entries(classMap).forEach(([oldClass, info]) => {
-    // Skip if not fully convertible
     if (!info.fullyConvertible) {
       return;
     }
 
-    const tailwindClassString = info.tailwindClasses.join(' ');
+    const tailwindClassString = assembleTailwindClasses(info);
     
-    // Pattern 1: className="oldClass" (simple string)
     const pattern1 = new RegExp(`className="${oldClass}"`, 'g');
     if (pattern1.test(modifiedCode)) {
       modifiedCode = modifiedCode.replace(pattern1, `className="${tailwindClassString}"`);
@@ -315,7 +374,6 @@ function replaceClassNameReferences(
       logger.verbose(`Replaced className="${oldClass}" with "${tailwindClassString}"`);
     }
 
-    // Pattern 2: className={"oldClass"} (expression with string)
     const pattern2 = new RegExp(`className=\\{"${oldClass}"\\}`, 'g');
     if (pattern2.test(modifiedCode)) {
       modifiedCode = modifiedCode.replace(pattern2, `className="${tailwindClassString}"`);
@@ -324,7 +382,6 @@ function replaceClassNameReferences(
       logger.verbose(`Replaced className={"${oldClass}"} with "${tailwindClassString}"`);
     }
 
-    // Pattern 3: className={`oldClass`} (simple template literal)
     const pattern3 = new RegExp(`className=\\{\`\\s*${oldClass}\\s*\`\\}`, 'g');
     if (pattern3.test(modifiedCode)) {
       modifiedCode = modifiedCode.replace(pattern3, `className="${tailwindClassString}"`);

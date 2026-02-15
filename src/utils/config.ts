@@ -10,6 +10,7 @@ export interface TailwindConfig {
     fontSize?: Record<string, any>;
     fontWeight?: Record<string, string>;
     borderRadius?: Record<string, string>;
+    screens?: Record<string, string | [string, string]>;
     [key: string]: any;
   };
   content?: string[];
@@ -83,6 +84,13 @@ export async function loadTailwindConfig(projectRoot: string): Promise<TailwindC
         '48': '12rem',
         '56': '14rem',
         '64': '16rem'
+      },
+      screens: {
+        'sm': '640px',
+        'md': '768px',
+        'lg': '1024px',
+        'xl': '1280px',
+        '2xl': '1536px'
       },
       colors: {
         transparent: 'transparent',

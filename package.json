@@ -1,6 +1,6 @@
 {
   "name": "css-to-tailwind-react",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Convert traditional CSS (inline, internal, and external) into Tailwind CSS utility classes for React-based frameworks",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -25,7 +25,9 @@
     "build:watch": "tsc --watch",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build",
-    "test": "echo \"No tests yet\" && exit 0",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
     "lint": "tsc --noEmit"
   },
   "keywords": [
@@ -61,9 +63,12 @@
   "devDependencies": {
     "@types/babel__generator": "^7.6.8",
     "@types/babel__traverse": "^7.20.5",
+    "@types/jest": "^30.0.0",
     "@types/node": "^20.10.6",
     "@types/postcss-safe-parser": "^5.0.4",
     "@types/resolve": "^1.20.6",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.6",
     "tsc-alias": "^1.8.8",
     "typescript": "^5.3.3"
   },
