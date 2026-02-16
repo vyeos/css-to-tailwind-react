@@ -24,6 +24,12 @@ interface ParsedSpacingValue {
   spacingKey: string | null;
 }
 
+export interface MapperOptions {
+  strictMode?: boolean;
+  disableArbitraryValues?: boolean;
+  customSpacingScale?: Record<string, string>;
+}
+
 export class TailwindMapper {
   private config: TailwindConfig;
   private spacingScale: Map<number, string>;
@@ -33,9 +39,15 @@ export class TailwindMapper {
   private letterSpacingScale: Map<string, string>;
   private zIndexScale: Map<number, string>;
   private opacityScale: Map<number, string>;
+  private strictMode: boolean;
+  private disableArbitraryValues: boolean;
+  private customSpacingScale: Record<string, string>;
 
-  constructor(config: TailwindConfig) {
+  constructor(config: TailwindConfig, options?: MapperOptions) {
     this.config = config;
+    this.strictMode = options?.strictMode ?? false;
+    this.disableArbitraryValues = options?.disableArbitraryValues ?? false;
+    this.customSpacingScale = options?.customSpacingScale ?? {};
     this.spacingScale = this.buildSpacingScale();
     this.maxWidthScale = this.buildMaxWidthScale();
     this.fontSizeScale = this.buildFontSizeScale();
@@ -43,6 +55,14 @@ export class TailwindMapper {
     this.letterSpacingScale = this.buildLetterSpacingScale();
     this.zIndexScale = this.buildZIndexScale();
     this.opacityScale = this.buildOpacityScale();
+  }
+
+  isStrictMode(): boolean {
+    return this.strictMode;
+  }
+
+  isArbitraryValuesDisabled(): boolean {
+    return this.disableArbitraryValues;
   }
 
   private buildSpacingScale(): Map<number, string> {
@@ -229,6 +249,15 @@ export class TailwindMapper {
 
   private parseSpacingValue(value: string): ParsedSpacingValue {
     const px = this.extractPx(value);
+    
+    if (this.customSpacingScale[value]) {
+      return {
+        value,
+        px,
+        spacingKey: this.customSpacingScale[value]
+      };
+    }
+    
     const spacingKey = px !== null ? this.pxToSpacing(px) : null;
 
     return {
@@ -238,10 +267,15 @@ export class TailwindMapper {
     };
   }
 
-  private buildSpacingUtility(prefix: string, parsed: ParsedSpacingValue): string {
+  private buildSpacingUtility(prefix: string, parsed: ParsedSpacingValue): string | null {
     if (parsed.spacingKey) {
       return `${prefix}-${parsed.spacingKey}`;
     }
+    
+    if (this.disableArbitraryValues) {
+      return null;
+    }
+    
     return `${prefix}-[${parsed.value}]`;
   }
 
@@ -617,8 +651,13 @@ export class TailwindMapper {
     if (tokens.length === 1) {
       const parsed = parsedTokens[0];
       if (parsed.px !== null || /^-?\d+(\.\d+)?(px|rem|em|%)?$/.test(tokens[0])) {
-        classes.push(this.buildSpacingUtility(prefix, parsed));
-        cssProperties.push(prop);
+        const utility = this.buildSpacingUtility(prefix, parsed);
+        if (utility) {
+          classes.push(utility);
+          cssProperties.push(prop);
+        } else if (this.strictMode) {
+          warnings.push(`Cannot convert ${prop}: ${tokens[0]} - no matching scale and arbitrary values disabled`);
+        }
       } else {
         warnings.push(`Invalid ${prop} value: ${tokens[0]}`);
       }
@@ -626,15 +665,25 @@ export class TailwindMapper {
       const [vertical, horizontal] = parsedTokens;
       
       if (vertical.px !== null || /^-?\d+(\.\d+)?(px|rem|em|%)?$/.test(tokens[0])) {
-        classes.push(this.buildSpacingUtility(`${prefix}y`, vertical));
-        cssProperties.push(`${propPrefix}-y`);
+        const utility = this.buildSpacingUtility(`${prefix}y`, vertical);
+        if (utility) {
+          classes.push(utility);
+          cssProperties.push(`${propPrefix}-y`);
+        } else if (this.strictMode) {
+          warnings.push(`Cannot convert ${prop}-y: ${tokens[0]} - no matching scale and arbitrary values disabled`);
+        }
       } else {
         warnings.push(`Invalid ${prop} vertical value: ${tokens[0]}`);
       }
 
       if (horizontal.px !== null || /^-?\d+(\.\d+)?(px|rem|em|%)?$/.test(tokens[1])) {
-        classes.push(this.buildSpacingUtility(`${prefix}x`, horizontal));
-        cssProperties.push(`${propPrefix}-x`);
+        const utility = this.buildSpacingUtility(`${prefix}x`, horizontal);
+        if (utility) {
+          classes.push(utility);
+          cssProperties.push(`${propPrefix}-x`);
+        } else if (this.strictMode) {
+          warnings.push(`Cannot convert ${prop}-x: ${tokens[1]} - no matching scale and arbitrary values disabled`);
+        }
       } else {
         warnings.push(`Invalid ${prop} horizontal value: ${tokens[1]}`);
       }
@@ -642,22 +691,37 @@ export class TailwindMapper {
       const [top, horizontal, bottom] = parsedTokens;
 
       if (top.px !== null || /^-?\d+(\.\d+)?(px|rem|em|%)?$/.test(tokens[0])) {
-        classes.push(this.buildSpacingUtility(`${prefix}t`, top));
-        cssProperties.push(`${propPrefix}-top`);
+        const utility = this.buildSpacingUtility(`${prefix}t`, top);
+        if (utility) {
+          classes.push(utility);
+          cssProperties.push(`${propPrefix}-top`);
+        } else if (this.strictMode) {
+          warnings.push(`Cannot convert ${prop}-top: ${tokens[0]} - no matching scale and arbitrary values disabled`);
+        }
       } else {
         warnings.push(`Invalid ${prop}-top value: ${tokens[0]}`);
       }
 
       if (horizontal.px !== null || /^-?\d+(\.\d+)?(px|rem|em|%)?$/.test(tokens[1])) {
-        classes.push(this.buildSpacingUtility(`${prefix}x`, horizontal));
-        cssProperties.push(`${propPrefix}-x`);
+        const utility = this.buildSpacingUtility(`${prefix}x`, horizontal);
+        if (utility) {
+          classes.push(utility);
+          cssProperties.push(`${propPrefix}-x`);
+        } else if (this.strictMode) {
+          warnings.push(`Cannot convert ${prop}-x: ${tokens[1]} - no matching scale and arbitrary values disabled`);
+        }
       } else {
         warnings.push(`Invalid ${prop} horizontal value: ${tokens[1]}`);
       }
 
       if (bottom.px !== null || /^-?\d+(\.\d+)?(px|rem|em|%)?$/.test(tokens[2])) {
-        classes.push(this.buildSpacingUtility(`${prefix}b`, bottom));
-        cssProperties.push(`${propPrefix}-bottom`);
+        const utility = this.buildSpacingUtility(`${prefix}b`, bottom);
+        if (utility) {
+          classes.push(utility);
+          cssProperties.push(`${propPrefix}-bottom`);
+        } else if (this.strictMode) {
+          warnings.push(`Cannot convert ${prop}-bottom: ${tokens[2]} - no matching scale and arbitrary values disabled`);
+        }
       } else {
         warnings.push(`Invalid ${prop}-bottom value: ${tokens[2]}`);
       }
@@ -665,29 +729,49 @@ export class TailwindMapper {
       const [top, right, bottom, left] = parsedTokens;
 
       if (top.px !== null || /^-?\d+(\.\d+)?(px|rem|em|%)?$/.test(tokens[0])) {
-        classes.push(this.buildSpacingUtility(`${prefix}t`, top));
-        cssProperties.push(`${propPrefix}-top`);
+        const utility = this.buildSpacingUtility(`${prefix}t`, top);
+        if (utility) {
+          classes.push(utility);
+          cssProperties.push(`${propPrefix}-top`);
+        } else if (this.strictMode) {
+          warnings.push(`Cannot convert ${prop}-top: ${tokens[0]} - no matching scale and arbitrary values disabled`);
+        }
       } else {
         warnings.push(`Invalid ${prop}-top value: ${tokens[0]}`);
       }
 
       if (right.px !== null || /^-?\d+(\.\d+)?(px|rem|em|%)?$/.test(tokens[1])) {
-        classes.push(this.buildSpacingUtility(`${prefix}r`, right));
-        cssProperties.push(`${propPrefix}-right`);
+        const utility = this.buildSpacingUtility(`${prefix}r`, right);
+        if (utility) {
+          classes.push(utility);
+          cssProperties.push(`${propPrefix}-right`);
+        } else if (this.strictMode) {
+          warnings.push(`Cannot convert ${prop}-right: ${tokens[1]} - no matching scale and arbitrary values disabled`);
+        }
       } else {
         warnings.push(`Invalid ${prop}-right value: ${tokens[1]}`);
       }
 
       if (bottom.px !== null || /^-?\d+(\.\d+)?(px|rem|em|%)?$/.test(tokens[2])) {
-        classes.push(this.buildSpacingUtility(`${prefix}b`, bottom));
-        cssProperties.push(`${propPrefix}-bottom`);
+        const utility = this.buildSpacingUtility(`${prefix}b`, bottom);
+        if (utility) {
+          classes.push(utility);
+          cssProperties.push(`${propPrefix}-bottom`);
+        } else if (this.strictMode) {
+          warnings.push(`Cannot convert ${prop}-bottom: ${tokens[2]} - no matching scale and arbitrary values disabled`);
+        }
       } else {
         warnings.push(`Invalid ${prop}-bottom value: ${tokens[2]}`);
       }
 
       if (left.px !== null || /^-?\d+(\.\d+)?(px|rem|em|%)?$/.test(tokens[3])) {
-        classes.push(this.buildSpacingUtility(`${prefix}l`, left));
-        cssProperties.push(`${propPrefix}-left`);
+        const utility = this.buildSpacingUtility(`${prefix}l`, left);
+        if (utility) {
+          classes.push(utility);
+          cssProperties.push(`${propPrefix}-left`);
+        } else if (this.strictMode) {
+          warnings.push(`Cannot convert ${prop}-left: ${tokens[3]} - no matching scale and arbitrary values disabled`);
+        }
       } else {
         warnings.push(`Invalid ${prop}-left value: ${tokens[3]}`);
       }
@@ -742,6 +826,13 @@ export class TailwindMapper {
     
     if (px === null) {
       if (/^-?\d+(\.\d+)?(px|rem|em|%)?$/.test(value)) {
+        if (this.disableArbitraryValues) {
+          return { 
+            className: null, 
+            skipped: true, 
+            reason: `Cannot convert ${prop}: ${value} - arbitrary values disabled` 
+          };
+        }
         return { className: `${prefix}-[${value}]`, skipped: false };
       }
       return { className: null, skipped: true, reason: `Non-pixel margin value: ${value}` };
@@ -749,6 +840,13 @@ export class TailwindMapper {
 
     const spacing = this.pxToSpacing(px);
     if (!spacing) {
+      if (this.disableArbitraryValues) {
+        return { 
+          className: null, 
+          skipped: true, 
+          reason: `Cannot convert ${prop}: ${value} - no matching scale and arbitrary values disabled` 
+        };
+      }
       return { className: `${prefix}-[${value}]`, skipped: false };
     }
 
@@ -771,6 +869,13 @@ export class TailwindMapper {
     
     if (px === null) {
       if (/^-?\d+(\.\d+)?(px|rem|em|%)?$/.test(value)) {
+        if (this.disableArbitraryValues) {
+          return { 
+            className: null, 
+            skipped: true, 
+            reason: `Cannot convert ${prop}: ${value} - arbitrary values disabled` 
+          };
+        }
         return { className: `${prefix}-[${value}]`, skipped: false };
       }
       return { className: null, skipped: true, reason: `Non-pixel padding value: ${value}` };
@@ -778,10 +883,28 @@ export class TailwindMapper {
 
     const spacing = this.pxToSpacing(px);
     if (!spacing) {
+      if (this.disableArbitraryValues) {
+        return { 
+          className: null, 
+          skipped: true, 
+          reason: `Cannot convert ${prop}: ${value} - no matching scale and arbitrary values disabled` 
+        };
+      }
       return { className: `${prefix}-[${value}]`, skipped: false };
     }
 
     return { className: `${prefix}-${spacing}`, skipped: false };
+  }
+
+  private buildArbitraryValue(prefix: string, value: string): ConversionResult {
+    if (this.disableArbitraryValues) {
+      return { 
+        className: null, 
+        skipped: true, 
+        reason: `Cannot convert to ${prefix}-[${value}] - arbitrary values disabled` 
+      };
+    }
+    return { className: `${prefix}-[${value}]`, skipped: false };
   }
 
   private convertDimensionConstraint(prop: string, value: string): ConversionResult {
@@ -836,7 +959,7 @@ export class TailwindMapper {
     }
 
     if (/^\d+(\.\d+)?(px|rem|em|%|ch|vw|vh)?$/.test(value)) {
-      return { className: `${prefix}-[${value}]`, skipped: false };
+      return this.buildArbitraryValue(prefix, value);
     }
 
     return { className: null, skipped: true, reason: `Complex ${prop} value: ${value}` };
@@ -932,7 +1055,7 @@ export class TailwindMapper {
     }
 
     if (/^-?\d+(\.\d+)?(em|px|rem)?$/.test(value)) {
-      return { className: `tracking-[${value}]`, skipped: false };
+      return this.buildArbitraryValue('tracking', value);
     }
 
     return { className: null, skipped: true, reason: `Unknown letter-spacing: ${value}` };
@@ -957,11 +1080,11 @@ export class TailwindMapper {
     }
 
     if (/^\d+(\.\d+)?$/.test(value)) {
-      return { className: `leading-[${value}]`, skipped: false };
+      return this.buildArbitraryValue('leading', value);
     }
 
     if (/^\d+(\.\d+)?(px|rem|em)?$/.test(value)) {
-      return { className: `leading-[${value}]`, skipped: false };
+      return this.buildArbitraryValue('leading', value);
     }
 
     return { className: null, skipped: true, reason: `Unknown line-height: ${value}` };
@@ -1041,7 +1164,7 @@ export class TailwindMapper {
       if (value === '1') {
         return { className: 'grow', skipped: false };
       }
-      return { className: `grow-[${value}]`, skipped: false };
+      return this.buildArbitraryValue('grow', value);
     }
 
     if (prop === 'flex-shrink') {
@@ -1051,7 +1174,7 @@ export class TailwindMapper {
       if (value === '1') {
         return { className: 'shrink', skipped: false };
       }
-      return { className: `shrink-[${value}]`, skipped: false };
+      return this.buildArbitraryValue('shrink', value);
     }
 
     if (prop === 'flex-basis') {
@@ -1069,7 +1192,7 @@ export class TailwindMapper {
         }
       }
       if (/^\d+(\.\d+)?(px|rem|em|%|vw|vh)?$/.test(value)) {
-        return { className: `basis-[${value}]`, skipped: false };
+        return this.buildArbitraryValue('basis', value);
       }
     }
 
@@ -1119,16 +1242,24 @@ export class TailwindMapper {
         classes.push('flex-none');
         cssProperties.push('flex');
       } else {
-        classes.push(`flex-[${value}]`);
-        cssProperties.push('flex');
+        if (this.disableArbitraryValues) {
+          warnings.push(`Cannot convert flex: ${value} - arbitrary values disabled`);
+        } else {
+          classes.push(`flex-[${value}]`);
+          cssProperties.push('flex');
+        }
       }
 
       return { classes, warnings, cssProperties };
     }
 
     if (tokens.length === 1 || tokens.length === 2) {
-      classes.push(`flex-[${value}]`);
-      cssProperties.push('flex');
+      if (this.disableArbitraryValues) {
+        warnings.push(`Cannot convert flex: ${value} - arbitrary values disabled`);
+      } else {
+        classes.push(`flex-[${value}]`);
+        cssProperties.push('flex');
+      }
       return { classes, warnings, cssProperties };
     }
 
@@ -1140,14 +1271,14 @@ export class TailwindMapper {
     const px = this.extractPx(value);
     if (px === null) {
       if (/^\d+(\.\d+)?(px|rem|em|%)?$/.test(value)) {
-        return { className: `gap-[${value}]`, skipped: false };
+        return this.buildArbitraryValue('gap', value);
       }
       return { className: null, skipped: true, reason: `Non-pixel gap value: ${value}` };
     }
 
     const spacing = this.pxToSpacing(px);
     if (!spacing) {
-      return { className: `gap-[${value}]`, skipped: false };
+      return this.buildArbitraryValue('gap', value);
     }
 
     return { className: `gap-${spacing}`, skipped: false };
@@ -1191,11 +1322,11 @@ export class TailwindMapper {
       if (spacing) {
         return { className: `w-${spacing}`, skipped: false };
       }
-      return { className: `w-[${value}]`, skipped: false };
+      return this.buildArbitraryValue('w', value);
     }
 
     if (/^\d+(\.\d+)?(px|rem|em|%|vw)?$/.test(value)) {
-      return { className: `w-[${value}]`, skipped: false };
+      return this.buildArbitraryValue('w', value);
     }
 
     return { className: null, skipped: true, reason: `Complex width value: ${value}` };
@@ -1230,11 +1361,11 @@ export class TailwindMapper {
       if (spacing) {
         return { className: `h-${spacing}`, skipped: false };
       }
-      return { className: `h-[${value}]`, skipped: false };
+      return this.buildArbitraryValue('h', value);
     }
 
     if (/^\d+(\.\d+)?(px|rem|em|%|vh)?$/.test(value)) {
-      return { className: `h-[${value}]`, skipped: false };
+      return this.buildArbitraryValue('h', value);
     }
 
     return { className: null, skipped: true, reason: `Complex height value: ${value}` };
@@ -1255,12 +1386,8 @@ export class TailwindMapper {
       return { className: colorMap[value], skipped: false };
     }
 
-    if (value.startsWith('#')) {
-      return { className: `bg-[${value}]`, skipped: false };
-    }
-
-    if (value.startsWith('rgb')) {
-      return { className: `bg-[${value}]`, skipped: false };
+    if (value.startsWith('#') || value.startsWith('rgb') || value.startsWith('hsl')) {
+      return this.buildArbitraryValue('bg', value);
     }
 
     return { className: null, skipped: true, reason: `Complex background-color: ${value}` };
@@ -1281,12 +1408,8 @@ export class TailwindMapper {
       return { className: colorMap[value], skipped: false };
     }
 
-    if (value.startsWith('#')) {
-      return { className: `text-[${value}]`, skipped: false };
-    }
-
-    if (value.startsWith('rgb')) {
-      return { className: `text-[${value}]`, skipped: false };
+    if (value.startsWith('#') || value.startsWith('rgb') || value.startsWith('hsl')) {
+      return this.buildArbitraryValue('text', value);
     }
 
     return { className: null, skipped: true, reason: `Complex color: ${value}` };
@@ -1300,7 +1423,7 @@ export class TailwindMapper {
         return { className: 'rounded-full', skipped: false };
       }
       if (/^\d+(\.\d+)?(px|rem|em|%)?$/.test(value)) {
-        return { className: `rounded-[${value}]`, skipped: false };
+        return this.buildArbitraryValue('rounded', value);
       }
       return { className: null, skipped: true, reason: `Complex border-radius: ${value}` };
     }
@@ -1326,7 +1449,7 @@ export class TailwindMapper {
       return { className: radiusMap[closest], skipped: false };
     }
 
-    return { className: `rounded-[${value}]`, skipped: false };
+    return this.buildArbitraryValue('rounded', value);
   }
 
   private convertBorder(prop: string, value: string): ConversionResult {
@@ -1344,7 +1467,7 @@ export class TailwindMapper {
       }
 
       if (/^\d+(\.\d+)?(px|rem|em)?$/.test(value)) {
-        return { className: `border-[${value}]`, skipped: false };
+        return this.buildArbitraryValue('border', value);
       }
 
       return { className: null, skipped: true, reason: `Unknown border-width: ${value}` };
@@ -1372,11 +1495,8 @@ export class TailwindMapper {
     }
 
     if (prop === 'border-color') {
-      if (value.startsWith('#')) {
-        return { className: `border-[${value}]`, skipped: false };
-      }
-      if (value.startsWith('rgb')) {
-        return { className: `border-[${value}]`, skipped: false };
+      if (value.startsWith('#') || value.startsWith('rgb') || value.startsWith('hsl')) {
+        return this.buildArbitraryValue('border', value);
       }
 
       const colorMap: Record<string, string> = {
@@ -1419,7 +1539,7 @@ export class TailwindMapper {
       }
 
       if (/^\d+(\.\d+)?(px|rem|em)?$/.test(value)) {
-        return { className: `${prefix}-[${value}]`, skipped: false };
+        return this.buildArbitraryValue(prefix, value);
       }
 
       return { className: null, skipped: true, reason: `Unknown ${prop}: ${value}` };
@@ -1465,7 +1585,11 @@ export class TailwindMapper {
       if (widthMap[width]) {
         classes.push(widthMap[width]);
       } else {
-        classes.push(`border-[${width}]`);
+        if (this.disableArbitraryValues) {
+          warnings.push(`Cannot convert border-width: ${width} - arbitrary values disabled`);
+        } else {
+          classes.push(`border-[${width}]`);
+        }
       }
       cssProperties.push('border-width');
     }
@@ -1488,12 +1612,12 @@ export class TailwindMapper {
     }
 
     if (color) {
-      if (color.startsWith('#')) {
-        classes.push(`border-[${color}]`);
-      } else if (color.startsWith('rgb')) {
-        classes.push(`border-[${color}]`);
-      } else if (color.startsWith('var(')) {
-        classes.push(`border-[${color}]`);
+      if (color.startsWith('#') || color.startsWith('rgb') || color.startsWith('hsl') || color.startsWith('var(')) {
+        if (this.disableArbitraryValues) {
+          warnings.push(`Cannot convert border-color: ${color} - arbitrary values disabled`);
+        } else {
+          classes.push(`border-[${color}]`);
+        }
       } else {
         const colorMap: Record<string, string> = {
           'transparent': 'border-transparent',

@@ -20,6 +20,7 @@ import {
 import { Specificity } from './utils/specificityCalculator';
 import { FileResult, SummaryStats } from './utils/reporter';
 import { VariableRegistry } from './utils/variableRegistry';
+import { Config, DEFAULT_CONFIG } from './utils/projectConfig';
 
 export interface TransformOptions {
   dryRun: boolean;
@@ -29,6 +30,12 @@ export interface TransformOptions {
   skipInternal: boolean;
   tailwindConfig: TailwindConfig | null;
   projectRoot: string;
+  config?: Config;
+  preserveOriginalCSS?: boolean;
+  strictMode?: boolean;
+  disableArbitraryValues?: boolean;
+  ignoreSelectors?: string[];
+  ignoreProperties?: string[];
 }
 
 export interface TransformResults {
@@ -110,12 +117,27 @@ export async function transformFilesDetailed(
 
   const fileResults: FileResult[] = [];
 
-  const mapper = new TailwindMapper(options.tailwindConfig || {});
+  const config = options.config ?? DEFAULT_CONFIG;
+  const strictMode = options.strictMode ?? config.strictMode;
+  const disableArbitraryValues = options.disableArbitraryValues ?? config.disableArbitraryValues;
+  const preserveOriginalCSS = options.preserveOriginalCSS ?? config.preserveOriginalCSS;
+  const ignoreSelectors = options.ignoreSelectors ?? config.ignoreSelectors;
+  const ignoreProperties = options.ignoreProperties ?? config.ignoreProperties;
+
+  const mapper = new TailwindMapper(options.tailwindConfig || {}, {
+    strictMode,
+    disableArbitraryValues,
+    customSpacingScale: config.customSpacingScale
+  });
   const jsxParser = new JSXParser(mapper);
   const screens = options.tailwindConfig?.theme?.screens;
   
   const sharedVariableRegistry = new VariableRegistry();
-  const cssParser = new CSSParser(mapper, screens, sharedVariableRegistry);
+  const cssParser = new CSSParser(mapper, screens, sharedVariableRegistry, {
+    ignoreSelectors,
+    ignoreProperties,
+    preserveOriginalCSS
+  });
 
   clearBreakpointCache();
 

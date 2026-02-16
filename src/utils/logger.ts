@@ -1,15 +1,41 @@
 import chalk from 'chalk';
+import { LogLevel } from './projectConfig';
 
 class Logger {
   private isVerbose: boolean = false;
   private isSilent: boolean = false;
+  private logLevel: LogLevel = 'info';
 
   setVerbose(verbose: boolean): void {
     this.isVerbose = verbose;
+    if (verbose) {
+      this.logLevel = 'verbose';
+    }
   }
 
   setSilent(silent: boolean): void {
     this.isSilent = silent;
+    if (silent) {
+      this.logLevel = 'silent';
+    }
+  }
+
+  setLogLevel(level: LogLevel): void {
+    this.logLevel = level;
+    this.isSilent = level === 'silent';
+    this.isVerbose = level === 'verbose';
+  }
+
+  getLogLevel(): LogLevel {
+    return this.logLevel;
+  }
+
+  isVerboseMode(): boolean {
+    return this.isVerbose;
+  }
+
+  isSilentMode(): boolean {
+    return this.isSilent;
   }
 
   info(message: string, ...args: any[]): void {

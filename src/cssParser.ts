@@ -85,14 +85,28 @@ export interface CSSUsageMap {
   [className: string]: string[];
 }
 
+export interface CSSParserOptions {
+  ignoreSelectors?: string[];
+  ignoreProperties?: string[];
+  preserveOriginalCSS?: boolean;
+}
+
 export class CSSParser {
   private mapper: TailwindMapper;
   private breakpoints: Breakpoint[];
   private sourceOrderCounter: number = 0;
   private variableRegistry: VariableRegistry;
   private sharedRegistry: boolean = false;
+  private ignoreSelectors: Set<string>;
+  private ignoreProperties: Set<string>;
+  private preserveOriginalCSS: boolean;
 
-  constructor(mapper: TailwindMapper, screens?: Record<string, string | [string, string]>, variableRegistry?: VariableRegistry) {
+  constructor(
+    mapper: TailwindMapper, 
+    screens?: Record<string, string | [string, string]>, 
+    variableRegistry?: VariableRegistry,
+    options?: CSSParserOptions
+  ) {
     this.mapper = mapper;
     this.breakpoints = screens 
       ? resolveBreakpointsFromConfig(screens) 
@@ -103,6 +117,22 @@ export class CSSParser {
     } else {
       this.variableRegistry = new VariableRegistry();
     }
+    this.ignoreSelectors = new Set(options?.ignoreSelectors ?? []);
+    this.ignoreProperties = new Set(options?.ignoreProperties ?? []);
+    this.preserveOriginalCSS = options?.preserveOriginalCSS ?? false;
+  }
+
+  shouldIgnoreSelector(selector: string): boolean {
+    return this.ignoreSelectors.has(selector);
+  }
+
+  shouldIgnoreProperty(property: string): boolean {
+    const normalized = property.toLowerCase().trim();
+    return this.ignoreProperties.has(normalized);
+  }
+
+  shouldPreserveCSS(): boolean {
+    return this.preserveOriginalCSS;
   }
 
   getVariableRegistry(): VariableRegistry {

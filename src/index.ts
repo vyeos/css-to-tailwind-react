@@ -1,9 +1,9 @@
 // Export public API
-export { scanProject, ScannedFile } from './scanner';
+export { scanProject, ScannedFile, ScanOptions } from './scanner';
 export { transformFiles, transformFilesDetailed, TransformOptions, TransformResults, DetailedTransformResults } from './transformer';
-export { TailwindMapper, CSSProperty, ConversionResult } from './tailwindMapper';
+export { TailwindMapper, CSSProperty, ConversionResult, MultiConversionResult, MapperOptions } from './tailwindMapper';
 export { JSXParser, JSXTransformation, JSXParseResult } from './jsxParser';
-export { CSSParser, CSSRule, CSSParseResult, UtilityWithVariant, SelectorTarget } from './cssParser';
+export { CSSParser, CSSRule, CSSParseResult, UtilityWithVariant, SelectorTarget, CSSParserOptions } from './cssParser';
 export { FileWriter, FileWriteOptions, writeFiles } from './fileWriter';
 export { loadTailwindConfig, TailwindConfig } from './utils/config';
 export { logger } from './utils/logger';
@@ -63,3 +63,18 @@ export {
   DescendantTransformResult,
   groupDescendantRulesByParent
 } from './jsxDescendantTransformer';
+export {
+  Config,
+  ConfigFile,
+  CLIConfigOverrides,
+  LogLevel,
+  OutputMode,
+  DEFAULT_CONFIG,
+  ConfigValidationError,
+  validateConfig,
+  loadConfigFile,
+  mergeConfigWithDefaults,
+  applyCLIOverrides,
+  resolveConfig,
+  formatConfigForDebug
+} from './utils/projectConfig';
