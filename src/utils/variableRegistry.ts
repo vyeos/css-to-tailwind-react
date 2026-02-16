@@ -70,8 +70,12 @@ export class VariableRegistry {
     }
     
     if (this.resolutionStack.has(varName)) {
-      logger.warn(`Circular reference detected for variable: ${varName}`);
-      return { value: fallback || '', resolved: false, source: 'circular' };
+      logger.verbose(`Circular reference detected for variable: ${varName}`);
+      if (fallback !== undefined) {
+        const resolvedFallback = this.resolveValue(fallback, context);
+        return { value: resolvedFallback.value, resolved: !resolvedFallback.hasUnresolved, source: 'circular-fallback' };
+      }
+      return { value: '', resolved: false, source: 'circular' };
     }
     
     this.resolutionStack.add(varName);
@@ -80,11 +84,11 @@ export class VariableRegistry {
       const definitions = this.variables.get(varName);
       
       if (!definitions || definitions.length === 0) {
-        if (fallback !== undefined) {
+        if (fallback !== undefined && fallback !== '') {
           const resolvedFallback = this.resolveValue(fallback, context);
-          return { value: resolvedFallback.value, resolved: true, source: 'fallback' };
+          return { value: resolvedFallback.value, resolved: !resolvedFallback.hasUnresolved, source: 'fallback' };
         }
-        logger.warn(`Undefined CSS variable: ${varName}`);
+        logger.verbose(`Undefined CSS variable: ${varName}`);
         return { value: '', resolved: false, source: 'undefined' };
       }
       
@@ -93,11 +97,11 @@ export class VariableRegistry {
       );
       
       if (applicableDefs.length === 0) {
-        if (fallback !== undefined) {
+        if (fallback !== undefined && fallback !== '') {
           const resolvedFallback = this.resolveValue(fallback, context);
-          return { value: resolvedFallback.value, resolved: true, source: 'fallback' };
+          return { value: resolvedFallback.value, resolved: !resolvedFallback.hasUnresolved, source: 'fallback' };
         }
-        logger.warn(`No applicable definition for variable: ${varName} in context: ${context.selector}`);
+        logger.verbose(`No applicable definition for variable: ${varName} in context: ${context.selector}`);
         return { value: '', resolved: false, source: 'no-match' };
       }
       
@@ -127,7 +131,7 @@ export class VariableRegistry {
   }
 
   resolveValue(value: string, context: ResolutionContext): { value: string; hasUnresolved: boolean; isCircular?: boolean } {
-    const varPattern = /var\s*\(\s*(--[a-zA-Z0-9_-]+)\s*(?:,\s*([^)]+))?\s*\)/g;
+    const varPattern = /var\s*\(\s*(--[a-zA-Z0-9_-]+)\s*(?:,\s*([^)]*))?\s*\)/g;
     let result = value;
     let hasUnresolved = false;
     let isCircular = false;
@@ -137,32 +141,49 @@ export class VariableRegistry {
     
     while ((match = varPattern.exec(result)) !== null) {
       if (++iterations > maxIterations) {
-        logger.warn(`Max variable resolution depth reached for: ${value}`);
+        logger.verbose(`Max variable resolution depth reached for: ${value}`);
         hasUnresolved = true;
         break;
       }
       
       const fullMatch = match[0];
       const varName = match[1];
-      const fallback = match[2]?.trim();
+      const innerFallback = match[2]?.trim();
       
-      const resolved = this.resolve(varName, context, fallback);
+      const resolved = this.resolve(varName, context, innerFallback);
       
-      if (resolved.source === 'circular') {
-        isCircular = true;
-        hasUnresolved = true;
-        result = resolved.value || '';
-        break;
+      if (resolved.source === 'circular' || resolved.source === 'circular-fallback') {
+        if (resolved.source === 'circular') {
+          isCircular = true;
+        }
+        if (resolved.value) {
+          result = result.replace(fullMatch, resolved.value);
+        } else {
+          hasUnresolved = true;
+          result = result.replace(fullMatch, '');
+        }
+        if (resolved.source === 'circular') {
+          break;
+        }
+        varPattern.lastIndex = 0;
+        continue;
       }
       
       if (!resolved.resolved) {
-        hasUnresolved = true;
-        result = resolved.value;
+        if (resolved.value && resolved.value.trim() !== '') {
+          result = result.replace(fullMatch, resolved.value);
+          hasUnresolved = true;
+        } else {
+          hasUnresolved = true;
+          result = result.replace(fullMatch, '');
+        }
       } else {
         result = result.replace(fullMatch, resolved.value);
       }
       varPattern.lastIndex = 0;
     }
+    
+    result = result.replace(/,\s*,/g, ',').replace(/^\s*,\s*/, '').replace(/\s*,\s*$/, '');
     
     return { value: result, hasUnresolved, isCircular };
   }

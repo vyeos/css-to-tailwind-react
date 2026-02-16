@@ -267,3 +267,80 @@ describe('Variable resolution failure without shared registry', () => {
     expect(result.warnings.length).toBeGreaterThan(0);
   });
 });
+
+describe('Font variables with external fallback', () => {
+  it('should handle nested var() with fallback when inner var undefined', async () => {
+    const mapper = new TailwindMapper({});
+    const sharedRegistry = new VariableRegistry();
+    const parser = new CSSParser(mapper, undefined, sharedRegistry);
+
+    const globalCSS = `
+      :root {
+        --spacing-mono: var(--undefined-spacing, 16px);
+      }
+    `;
+
+    const componentCSS = `
+      .box {
+        padding: var(--spacing-mono);
+      }
+    `;
+
+    await parser.collectVariablesOnly(globalCSS, 'globals.css');
+    const result = await parser.parse(componentCSS, 'component.css');
+
+    expect(result.rules).toHaveLength(1);
+    expect(result.rules[0].convertedClasses).toContain('p-[16px]');
+  });
+
+  it('should handle spacing variables with Tailwind scale values', async () => {
+    const mapper = new TailwindMapper({});
+    const sharedRegistry = new VariableRegistry();
+    const parser = new CSSParser(mapper, undefined, sharedRegistry);
+
+    const globalCSS = `
+      :root {
+        --spacing-mono: 16px;
+        --spacing-sans: 24px;
+      }
+    `;
+
+    const componentCSS = `
+      .box {
+        padding: var(--spacing-mono);
+        margin: var(--spacing-sans);
+      }
+    `;
+
+    await parser.collectVariablesOnly(globalCSS, 'globals.css');
+    const result = await parser.parse(componentCSS, 'component.css');
+
+    expect(result.rules).toHaveLength(1);
+    expect(result.rules[0].convertedClasses).toContain('p-[16px]');
+    expect(result.rules[0].convertedClasses).toContain('m-[24px]');
+  });
+
+  it('should use fallback when nested variable is undefined', async () => {
+    const mapper = new TailwindMapper({});
+    const sharedRegistry = new VariableRegistry();
+    const parser = new CSSParser(mapper, undefined, sharedRegistry);
+
+    const globalCSS = `
+      :root {
+        --spacing-value: var(--undefined-spacing), 32px;
+      }
+    `;
+
+    const componentCSS = `
+      .box {
+        padding: var(--spacing-value);
+      }
+    `;
+
+    await parser.collectVariablesOnly(globalCSS, 'globals.css');
+    const result = await parser.parse(componentCSS, 'component.css');
+
+    expect(result.rules).toHaveLength(1);
+    expect(result.rules[0].convertedClasses).toContain('p-[32px]');
+  });
+});
