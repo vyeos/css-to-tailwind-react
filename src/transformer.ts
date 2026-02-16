@@ -19,6 +19,7 @@ import {
 } from './utils/conflictResolver';
 import { Specificity } from './utils/specificityCalculator';
 import { FileResult, SummaryStats } from './utils/reporter';
+import { VariableRegistry } from './utils/variableRegistry';
 
 export interface TransformOptions {
   dryRun: boolean;
@@ -112,19 +113,49 @@ export async function transformFilesDetailed(
   const mapper = new TailwindMapper(options.tailwindConfig || {});
   const jsxParser = new JSXParser(mapper);
   const screens = options.tailwindConfig?.theme?.screens;
-  const cssParser = new CSSParser(mapper, screens);
+  
+  const sharedVariableRegistry = new VariableRegistry();
+  const cssParser = new CSSParser(mapper, screens, sharedVariableRegistry);
 
   clearBreakpointCache();
 
   const cssClassMap: CSSClassMap = {};
   const allDescendantRules: CSSRule[] = [];
 
+  const cssFiles = files.filter(f => f.type === 'css');
+  const jsxFiles = files.filter(f => f.type === 'jsx');
+
+  logger.info('\n🔍 Phase 0: Collecting CSS variables from all files...');
+
+  if (!options.skipExternal) {
+    for (const file of cssFiles) {
+      try {
+        const content = fs.readFileSync(file.path, 'utf-8');
+        await cssParser.collectVariablesOnly(content, file.path);
+      } catch (error) {
+        logger.warn(`Failed to collect variables from ${file.path}: ${error}`);
+      }
+    }
+    
+    for (const file of jsxFiles) {
+      if (options.skipInternal) continue;
+      try {
+        const content = fs.readFileSync(file.path, 'utf-8');
+        await cssParser.collectVariablesFromInternalCSS(content, file.path);
+      } catch (error) {
+        logger.warn(`Failed to collect internal CSS variables from ${file.path}: ${error}`);
+      }
+    }
+    
+    logger.verbose(`Collected ${sharedVariableRegistry.getRegisteredVariables().length} unique CSS variables`);
+  }
+
   logger.info('\n🔍 Phase 1: Analyzing CSS files...');
 
   const cssFileResults: Map<string, ProcessedCSSFile> = new Map();
 
   if (!options.skipExternal) {
-    for (const file of files.filter(f => f.type === 'css')) {
+    for (const file of cssFiles) {
       try {
         const content = fs.readFileSync(file.path, 'utf-8');
         const result = await cssParser.parse(content, file.path);
@@ -203,7 +234,7 @@ export async function transformFilesDetailed(
 
   const jsxFileResults: Map<string, ProcessedJSXFile> = new Map();
 
-  for (const file of files.filter(f => f.type === 'jsx')) {
+  for (const file of jsxFiles) {
     try {
       let content = fs.readFileSync(file.path, 'utf-8');
       const originalContent = content;

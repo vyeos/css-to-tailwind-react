@@ -90,18 +90,30 @@ export class CSSParser {
   private breakpoints: Breakpoint[];
   private sourceOrderCounter: number = 0;
   private variableRegistry: VariableRegistry;
+  private sharedRegistry: boolean = false;
 
-  constructor(mapper: TailwindMapper, screens?: Record<string, string | [string, string]>) {
+  constructor(mapper: TailwindMapper, screens?: Record<string, string | [string, string]>, variableRegistry?: VariableRegistry) {
     this.mapper = mapper;
     this.breakpoints = screens 
       ? resolveBreakpointsFromConfig(screens) 
       : getBreakpoints();
-    this.variableRegistry = new VariableRegistry();
+    if (variableRegistry) {
+      this.variableRegistry = variableRegistry;
+      this.sharedRegistry = true;
+    } else {
+      this.variableRegistry = new VariableRegistry();
+    }
+  }
+
+  getVariableRegistry(): VariableRegistry {
+    return this.variableRegistry;
   }
 
   private resetSourceOrder(): void {
     this.sourceOrderCounter = 0;
-    this.variableRegistry.clear();
+    if (!this.sharedRegistry) {
+      this.variableRegistry.clear();
+    }
   }
 
   private getNextSourceOrder(): number {
@@ -463,7 +475,9 @@ export class CSSParser {
         from: filePath
       }).then(result => result.root);
 
-      this.collectVariables(root, []);
+      if (!this.sharedRegistry) {
+        this.collectVariables(root, []);
+      }
 
       root.walkAtRules((atRule) => {
         if (atRule.name !== 'media') {
@@ -479,7 +493,9 @@ export class CSSParser {
 
         const responsiveVariant = mediaResult.breakpoint!;
         
-        this.collectVariables(atRule, [responsiveVariant]);
+        if (!this.sharedRegistry) {
+          this.collectVariables(atRule, [responsiveVariant]);
+        }
 
         const nestedRules: Rule[] = [];
         atRule.walkRules((rule) => {
@@ -740,5 +756,44 @@ export class CSSParser {
     }
 
     return imports;
+  }
+
+  async collectVariablesOnly(css: string, filePath: string): Promise<void> {
+    try {
+      const root = await postcss().process(css, {
+        parser: safeParser,
+        from: filePath
+      }).then(result => result.root);
+
+      this.collectVariables(root, []);
+
+      root.walkAtRules((atRule) => {
+        if (atRule.name !== 'media') {
+          return;
+        }
+
+        const mediaResult = processMediaQuery(atRule.params, this.breakpoints);
+        if (mediaResult.skipped) {
+          return;
+        }
+
+        const responsiveVariant = mediaResult.breakpoint!;
+        this.collectVariables(atRule, [responsiveVariant]);
+      });
+    } catch (error) {
+      logger.warn(`Failed to collect variables from ${filePath}: ${error}`);
+    }
+  }
+
+  async collectVariablesFromInternalCSS(html: string, filePath: string): Promise<void> {
+    const { styles } = this.parseInternalStyle(html);
+
+    for (const style of styles) {
+      try {
+        await this.collectVariablesOnly(style.content, filePath);
+      } catch (error) {
+        logger.warn(`Failed to collect variables from internal CSS in ${filePath}: ${error}`);
+      }
+    }
   }
 }
