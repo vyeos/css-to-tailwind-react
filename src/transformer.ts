@@ -4,23 +4,21 @@ import { ScannedFile } from './scanner';
 import { TailwindMapper } from './tailwindMapper';
 import { JSXParser } from './jsxParser';
 import { CSSParser, CSSRule, UtilityWithVariant } from './cssParser';
-import { FileWriter } from './fileWriter';
 import { TailwindConfig } from './utils/config';
 import { logger } from './utils/logger';
 import { clearBreakpointCache } from './utils/breakpointResolver';
 import { 
   assembleUtilities, 
-  mergeUtilities,
   normalizeVariantOrder 
 } from './utils/variantAssembler';
 import { transformDescendantSelectors } from './jsxDescendantTransformer';
 import { 
   UtilityWithMeta, 
-  ResolvedUtility, 
   resolveConflicts, 
   resolvedUtilitiesToStrings 
 } from './utils/conflictResolver';
-import { Specificity, ZERO_SPECIFICITY } from './utils/specificityCalculator';
+import { Specificity } from './utils/specificityCalculator';
+import { FileResult, SummaryStats } from './utils/reporter';
 
 export interface TransformOptions {
   dryRun: boolean;
@@ -40,6 +38,11 @@ export interface TransformResults {
   warnings: number;
 }
 
+export interface DetailedTransformResults {
+  fileResults: FileResult[];
+  stats: SummaryStats;
+}
+
 interface ClassInfo {
   utilities: UtilityWithMeta[];
   sourceFile: string;
@@ -50,43 +53,75 @@ interface CSSClassMap {
   [className: string]: ClassInfo;
 }
 
-interface CollectedRules {
-  simpleRules: CSSRule[];
-  descendantRules: CSSRule[];
+interface ProcessedCSSFile {
+  path: string;
+  content: string;
+  newContent: string;
+  rules: CSSRule[];
+  canDelete: boolean;
+  hasChanges: boolean;
+  fullyConvertible: boolean;
+  warnings: string[];
+  error?: string;
+}
+
+interface ProcessedJSXFile {
+  path: string;
+  content: string;
+  newContent: string;
+  hasChanges: boolean;
+  warnings: string[];
+  error?: string;
+  utilitiesGenerated: number;
+  classesReplaced: number;
 }
 
 export async function transformFiles(
   files: ScannedFile[],
   options: TransformOptions
 ): Promise<TransformResults> {
-  const results: TransformResults = {
+  const detailed = await transformFilesDetailed(files, options);
+  return {
+    filesScanned: detailed.stats.filesScanned,
+    filesModified: detailed.stats.filesModified,
+    stylesConverted: detailed.stats.utilitiesGenerated,
+    classesReplaced: detailed.stats.classesReplaced,
+    warnings: detailed.stats.warnings
+  };
+}
+
+export async function transformFilesDetailed(
+  files: ScannedFile[],
+  options: TransformOptions
+): Promise<DetailedTransformResults> {
+  const stats: SummaryStats = {
     filesScanned: files.length,
     filesModified: 0,
-    stylesConverted: 0,
+    filesUnchanged: 0,
+    filesWithError: 0,
+    utilitiesGenerated: 0,
     classesReplaced: 0,
+    conflictsResolved: 0,
+    unsupportedSelectors: 0,
+    errors: 0,
     warnings: 0
   };
+
+  const fileResults: FileResult[] = [];
 
   const mapper = new TailwindMapper(options.tailwindConfig || {});
   const jsxParser = new JSXParser(mapper);
   const screens = options.tailwindConfig?.theme?.screens;
   const cssParser = new CSSParser(mapper, screens);
-  const fileWriter = new FileWriter({ dryRun: options.dryRun });
 
   clearBreakpointCache();
 
   const cssClassMap: CSSClassMap = {};
   const allDescendantRules: CSSRule[] = [];
-  const cssFileResults: Map<string, {
-    content: string;
-    newContent: string;
-    rules: CSSRule[];
-    canDelete: boolean;
-    hasChanges: boolean;
-    fullyConvertible: boolean;
-  }> = new Map();
 
-  logger.info('\n🔍 Phase 1: Analyzing files...');
+  logger.info('\n🔍 Phase 1: Analyzing CSS files...');
+
+  const cssFileResults: Map<string, ProcessedCSSFile> = new Map();
 
   if (!options.skipExternal) {
     for (const file of files.filter(f => f.type === 'css')) {
@@ -103,7 +138,7 @@ export async function transformFiles(
           if (rule.isDescendant) {
             if (rule.convertedClasses.length > 0) {
               allDescendantRules.push(rule);
-              results.stylesConverted += rule.declarations.length;
+              stats.utilitiesGenerated += rule.declarations.length;
             }
           } else if (rule.className && rule.convertedClasses.length > 0) {
             const existing = cssClassMap[rule.className];
@@ -113,24 +148,26 @@ export async function transformFiles(
               cssClassMap[rule.className] = buildClassInfoFromRule(rule, file.path);
             }
             if (rule.fullyConverted) {
-              results.stylesConverted += rule.declarations.length;
+              stats.utilitiesGenerated += rule.declarations.length;
             } else {
-              results.stylesConverted += rule.convertedClasses.length;
+              stats.utilitiesGenerated += rule.convertedClasses.length;
               logger.verbose(`  Rule .${rule.className}: partial conversion (${rule.convertedClasses.length}/${rule.declarations.length} declarations)`);
             }
           }
         });
 
         cssFileResults.set(file.path, {
+          path: file.path,
           content,
           newContent: result.css,
           rules: result.rules,
           canDelete: result.canDelete,
           hasChanges: result.hasChanges,
-          fullyConvertible
+          fullyConvertible,
+          warnings: result.warnings
         });
 
-        results.warnings += result.warnings.length;
+        stats.warnings += result.warnings.length;
 
         logger.verbose(`Analyzed ${file.path}:`);
         logger.verbose(`  - Total rules: ${totalRules}`);
@@ -143,19 +180,28 @@ export async function transformFiles(
         });
 
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         logger.error(`Failed to analyze ${file.path}:`, error);
-        results.warnings++;
+        cssFileResults.set(file.path, {
+          path: file.path,
+          content: '',
+          newContent: '',
+          rules: [],
+          canDelete: false,
+          hasChanges: false,
+          fullyConvertible: false,
+          warnings: [],
+          error: errorMessage
+        });
+        stats.errors++;
+        stats.warnings++;
       }
     }
   }
 
   logger.info('\n⚛️  Phase 2: Transforming React components...');
 
-  const jsxFileResults: Map<string, {
-    content: string;
-    newContent: string;
-    hasChanges: boolean;
-  }> = new Map();
+  const jsxFileResults: Map<string, ProcessedJSXFile> = new Map();
 
   for (const file of files.filter(f => f.type === 'jsx')) {
     try {
@@ -163,6 +209,8 @@ export async function transformFiles(
       const originalContent = content;
       let hasChanges = false;
       let fileWarnings: string[] = [];
+      let utilitiesGenerated = 0;
+      let classesReplaced = 0;
 
       if (!options.skipInline) {
         try {
@@ -171,7 +219,7 @@ export async function transformFiles(
           if (jsxResult.hasChanges) {
             content = jsxResult.code;
             hasChanges = true;
-            results.stylesConverted += jsxResult.transformations.reduce(
+            utilitiesGenerated += jsxResult.transformations.reduce(
               (sum, t) => sum + t.classes.length, 0
             );
             fileWarnings.push(...jsxResult.warnings);
@@ -194,7 +242,7 @@ export async function transformFiles(
               if (rule.isDescendant) {
                 if (rule.convertedClasses.length > 0) {
                   allDescendantRules.push(rule);
-                  results.stylesConverted += rule.declarations.length;
+                  utilitiesGenerated += rule.declarations.length;
                 }
               } else if (rule.convertedClasses.length > 0 && rule.className) {
                 const existing = cssClassMap[rule.className];
@@ -203,7 +251,7 @@ export async function transformFiles(
                 } else {
                   cssClassMap[rule.className] = buildClassInfoFromRule(rule, file.path);
                 }
-                results.stylesConverted += rule.declarations.length;
+                utilitiesGenerated += rule.declarations.length;
               }
             });
             
@@ -216,20 +264,35 @@ export async function transformFiles(
       }
 
       jsxFileResults.set(file.path, {
+        path: file.path,
         content: originalContent,
         newContent: content,
-        hasChanges
+        hasChanges,
+        warnings: fileWarnings,
+        utilitiesGenerated,
+        classesReplaced
       });
 
-      results.warnings += fileWarnings.length;
+      stats.warnings += fileWarnings.length;
 
       fileWarnings.forEach(warning => {
         logger.verbose(`⚠️  ${file.path}: ${warning}`);
       });
 
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error(`Failed to process ${file.path}:`, error);
-      results.warnings++;
+      jsxFileResults.set(file.path, {
+        path: file.path,
+        content: '',
+        newContent: '',
+        hasChanges: false,
+        warnings: [],
+        utilitiesGenerated: 0,
+        classesReplaced: 0,
+        error: errorMessage
+      });
+      stats.errors++;
     }
   }
 
@@ -237,6 +300,8 @@ export async function transformFiles(
     logger.info('\n🔄 Phase 3: Replacing className references...');
 
     for (const [filePath, fileResult] of jsxFileResults) {
+      if (fileResult.error) continue;
+      
       let content = fileResult.newContent;
       let hasChanges = fileResult.hasChanges;
 
@@ -244,7 +309,8 @@ export async function transformFiles(
       if (replacementResult.hasChanges) {
         content = replacementResult.code;
         hasChanges = true;
-        results.classesReplaced += replacementResult.replacements;
+        fileResult.classesReplaced += replacementResult.replacements;
+        stats.classesReplaced += replacementResult.replacements;
         
         logger.verbose(`Replaced ${replacementResult.replacements} class references in ${path.basename(filePath)}`);
       }
@@ -261,6 +327,8 @@ export async function transformFiles(
     logger.info('\n🌳 Phase 3.5: Applying descendant selector rules...');
 
     for (const [filePath, fileResult] of jsxFileResults) {
+      if (fileResult.error) continue;
+      
       let content = fileResult.newContent;
       let hasChanges = fileResult.hasChanges;
 
@@ -268,13 +336,14 @@ export async function transformFiles(
       if (descendantResult.hasChanges) {
         content = descendantResult.code;
         hasChanges = true;
-        results.classesReplaced += descendantResult.transformations;
+        fileResult.classesReplaced += descendantResult.transformations;
+        stats.classesReplaced += descendantResult.transformations;
         
         logger.verbose(`Applied ${descendantResult.transformations} descendant transformations in ${path.basename(filePath)}`);
       }
 
       if (descendantResult.warnings.length > 0) {
-        results.warnings += descendantResult.warnings.length;
+        stats.warnings += descendantResult.warnings.length;
         descendantResult.warnings.forEach(warning => {
           logger.verbose(`⚠️  ${filePath}: ${warning}`);
         });
@@ -288,47 +357,76 @@ export async function transformFiles(
     }
   }
 
-  logger.info('\n💾 Phase 4: Writing changes...');
-
   for (const [filePath, fileResult] of jsxFileResults) {
-    if (fileResult.hasChanges) {
-      const success = await fileWriter.writeFile(filePath, fileResult.newContent, fileResult.content);
-      if (success) {
-        results.filesModified++;
+    if (fileResult.error) {
+      fileResults.push({
+        filePath,
+        originalContent: fileResult.content,
+        newContent: fileResult.newContent,
+        hasChanges: false,
+        status: 'error',
+        error: fileResult.error
+      });
+      stats.filesWithError++;
+      continue;
+    }
+    
+    const hasChanges = fileResult.newContent !== fileResult.content;
+    
+    fileResults.push({
+      filePath,
+      originalContent: fileResult.content,
+      newContent: fileResult.newContent,
+      hasChanges,
+      status: hasChanges ? 'modified' : 'unchanged',
+      transformations: {
+        utilitiesGenerated: fileResult.utilitiesGenerated,
+        classesReplaced: fileResult.classesReplaced,
+        conflictsResolved: 0
       }
+    });
+    
+    if (hasChanges) {
+      stats.filesModified++;
+    } else {
+      stats.filesUnchanged++;
     }
   }
 
-  if (!options.skipExternal) {
-    for (const [filePath, fileResult] of cssFileResults) {
-      if (!fileResult.hasChanges) continue;
-
-      if (fileResult.canDelete && options.deleteCss) {
-        const success = await fileWriter.deleteFile(filePath);
-        if (success) {
-          results.filesModified++;
-          logger.info(`🗑️  Deleted ${path.basename(filePath)} (all rules converted)`);
-        }
-      } else if (fileResult.canDelete && !options.deleteCss) {
-        logger.info(`ℹ️  ${path.basename(filePath)} is now empty (use --delete-css to remove)`);
-      } else if (fileResult.fullyConvertible) {
-        const success = await fileWriter.writeFile(filePath, fileResult.newContent, fileResult.content);
-        if (success) {
-          results.filesModified++;
-        }
-      } else {
-        const success = await fileWriter.writeFile(filePath, fileResult.newContent, fileResult.content);
-        if (success) {
-          results.filesModified++;
-          const convertedCount = fileResult.rules.filter(r => r.convertedClasses.length > 0).length;
-          const totalCount = fileResult.rules.length;
-          logger.info(`📝 ${path.basename(filePath)}: converted ${convertedCount}/${totalCount} rules (unconverted properties kept)`);
-        }
-      }
+  for (const [filePath, fileResult] of cssFileResults) {
+    if (fileResult.error) {
+      fileResults.push({
+        filePath,
+        originalContent: fileResult.content,
+        newContent: fileResult.newContent,
+        hasChanges: false,
+        status: 'error',
+        error: fileResult.error
+      });
+      stats.filesWithError++;
+      continue;
+    }
+    
+    const hasChanges = fileResult.hasChanges && fileResult.newContent !== fileResult.content;
+    
+    fileResults.push({
+      filePath,
+      originalContent: fileResult.content,
+      newContent: fileResult.newContent,
+      hasChanges,
+      status: hasChanges ? 'modified' : 'unchanged'
+    });
+    
+    if (hasChanges) {
+      stats.filesModified++;
+    } else {
+      stats.filesUnchanged++;
     }
   }
 
-  return results;
+  stats.utilitiesGenerated = stats.classesReplaced + stats.utilitiesGenerated;
+
+  return { fileResults, stats };
 }
 
 function buildClassInfoFromRule(rule: CSSRule, sourceFile: string): ClassInfo {

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import chalk from 'chalk';
 import { logger } from './utils/logger';
+import { FileResult } from './utils/reporter';
 
 export interface FileWriteOptions {
   dryRun: boolean;
@@ -11,25 +11,23 @@ export interface FileWriteOptions {
 export class FileWriter {
   private dryRun: boolean;
   private backupDir: string;
+  private projectRoot: string;
 
-  constructor(options: FileWriteOptions) {
+  constructor(options: FileWriteOptions & { projectRoot?: string }) {
     this.dryRun = options.dryRun;
-    this.backupDir = path.join(process.cwd(), '.css-to-tailwind-backups');
+    this.projectRoot = options.projectRoot || process.cwd();
+    this.backupDir = path.join(this.projectRoot, '.css-to-tailwind-backups');
   }
 
   async writeFile(filePath: string, content: string, originalContent: string): Promise<boolean> {
     if (this.dryRun) {
-      this.showDiff(filePath, originalContent, content);
       return true;
     }
 
     try {
-      // Create backup
       await this.createBackup(filePath, originalContent);
-
-      // Write file
       fs.writeFileSync(filePath, content, 'utf-8');
-      logger.success(`✏️  Modified: ${path.relative(process.cwd(), filePath)}`);
+      logger.success(`✏️  Modified: ${path.relative(this.projectRoot, filePath)}`);
       return true;
     } catch (error) {
       logger.error(`Failed to write ${filePath}:`, error);
@@ -39,17 +37,15 @@ export class FileWriter {
 
   async deleteFile(filePath: string): Promise<boolean> {
     if (this.dryRun) {
-      logger.info(`🗑️  Would delete: ${path.relative(process.cwd(), filePath)}`);
+      logger.info(`🗑️  Would delete: ${path.relative(this.projectRoot, filePath)}`);
       return true;
     }
 
     try {
-      // Create backup before deletion
       const content = fs.readFileSync(filePath, 'utf-8');
       await this.createBackup(filePath, content);
-
       fs.unlinkSync(filePath);
-      logger.success(`🗑️  Deleted: ${path.relative(process.cwd(), filePath)}`);
+      logger.success(`🗑️  Deleted: ${path.relative(this.projectRoot, filePath)}`);
       return true;
     } catch (error) {
       logger.error(`Failed to delete ${filePath}:`, error);
@@ -57,23 +53,39 @@ export class FileWriter {
     }
   }
 
+  async writeResults(results: FileResult[]): Promise<number> {
+    let written = 0;
+    
+    for (const result of results) {
+      if (result.status === 'error') continue;
+      if (!result.hasChanges) continue;
+      
+      const success = await this.writeFile(
+        result.filePath,
+        result.newContent,
+        result.originalContent
+      );
+      
+      if (success) written++;
+    }
+    
+    return written;
+  }
+
   private async createBackup(filePath: string, content: string): Promise<void> {
     try {
-      // Create backup directory if it doesn't exist
       if (!fs.existsSync(this.backupDir)) {
         fs.mkdirSync(this.backupDir, { recursive: true });
       }
 
-      const relativePath = path.relative(process.cwd(), filePath);
+      const relativePath = path.relative(this.projectRoot, filePath);
       const backupPath = path.join(this.backupDir, relativePath);
       const backupDir = path.dirname(backupPath);
 
-      // Create subdirectory structure
       if (!fs.existsSync(backupDir)) {
         fs.mkdirSync(backupDir, { recursive: true });
       }
 
-      // Write backup
       fs.writeFileSync(backupPath, content, 'utf-8');
       logger.verbose(`Created backup: ${backupPath}`);
     } catch (error) {
@@ -81,35 +93,8 @@ export class FileWriter {
     }
   }
 
-  private showDiff(filePath: string, original: string, modified: string): void {
-    const relativePath = path.relative(process.cwd(), filePath);
-    logger.info(`\n📄 ${relativePath} (dry-run)`);
-    
-    const originalLines = original.split('\n');
-    const modifiedLines = modified.split('\n');
-
-    // Simple diff - show first few changed lines
-    const maxLines = Math.max(originalLines.length, modifiedLines.length);
-    let changes = 0;
-
-    for (let i = 0; i < maxLines && changes < 10; i++) {
-      const orig = originalLines[i] || '';
-      const mod = modifiedLines[i] || '';
-
-      if (orig !== mod) {
-        changes++;
-        console.log(chalk.red(`  - ${orig}`));
-        console.log(chalk.green(`  + ${mod}`));
-      }
-    }
-
-    if (changes === 0) {
-      logger.verbose('  (no visible changes)');
-    }
-  }
-
-  static restoreBackups(): void {
-    const backupDir = path.join(process.cwd(), '.css-to-tailwind-backups');
+  static restoreBackups(projectRoot: string = process.cwd()): void {
+    const backupDir = path.join(projectRoot, '.css-to-tailwind-backups');
     
     if (!fs.existsSync(backupDir)) {
       logger.warn('No backups found to restore');
@@ -118,7 +103,6 @@ export class FileWriter {
 
     logger.info('🔄 Restoring files from backup...');
     
-    // Recursively restore files
     const restoreRecursive = (dir: string) => {
       const items = fs.readdirSync(dir);
 
@@ -130,7 +114,7 @@ export class FileWriter {
           restoreRecursive(fullPath);
         } else {
           const relativePath = path.relative(backupDir, fullPath);
-          const originalPath = path.join(process.cwd(), relativePath);
+          const originalPath = path.join(projectRoot, relativePath);
           
           try {
             fs.copyFileSync(fullPath, originalPath);
@@ -145,4 +129,20 @@ export class FileWriter {
     restoreRecursive(backupDir);
     logger.success('✅ Restore complete');
   }
+}
+
+export async function writeFiles(
+  results: FileResult[],
+  options: { dryRun: boolean; projectRoot: string }
+): Promise<number> {
+  if (options.dryRun) {
+    return results.filter(r => r.hasChanges && r.status !== 'error').length;
+  }
+  
+  const writer = new FileWriter({ 
+    dryRun: false, 
+    projectRoot: options.projectRoot 
+  });
+  
+  return writer.writeResults(results);
 }

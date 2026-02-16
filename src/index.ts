@@ -1,12 +1,22 @@
 // Export public API
 export { scanProject, ScannedFile } from './scanner';
-export { transformFiles, TransformOptions, TransformResults } from './transformer';
+export { transformFiles, transformFilesDetailed, TransformOptions, TransformResults, DetailedTransformResults } from './transformer';
 export { TailwindMapper, CSSProperty, ConversionResult } from './tailwindMapper';
 export { JSXParser, JSXTransformation, JSXParseResult } from './jsxParser';
 export { CSSParser, CSSRule, CSSParseResult, UtilityWithVariant, SelectorTarget } from './cssParser';
-export { FileWriter, FileWriteOptions } from './fileWriter';
+export { FileWriter, FileWriteOptions, writeFiles } from './fileWriter';
 export { loadTailwindConfig, TailwindConfig } from './utils/config';
 export { logger } from './utils/logger';
+export { Reporter, FileResult, SummaryStats, ReporterOptions } from './utils/reporter';
+export { 
+  computeUnifiedDiff, 
+  formatDiff, 
+  computeAndFormatDiff, 
+  getChangeStats,
+  DiffResult,
+  DiffHunk,
+  DiffLine
+} from './utils/diff';
 export {
   Breakpoint,
   MediaQueryInfo,
