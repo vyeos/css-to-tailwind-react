@@ -18,14 +18,31 @@ A powerful CLI tool that converts traditional CSS (inline, internal, and externa
 
 ## Installation
 
+### From GitHub Packages
+
+First, create or update your `.npmrc` file to use GitHub Packages:
+
 ```bash
-npm install -g css-to-tailwind-react
+# .npmrc
+@vyeos:registry=https://npm.pkg.github.com
 ```
 
-Or use directly with npx:
+Then authenticate with GitHub Packages:
 
 ```bash
-npx css-to-tailwind-react ./src
+npm login --scope=@vyeos --registry=https://npm.pkg.github.com
+```
+
+Install the package:
+
+```bash
+npm install -g @vyeos/css-to-tailwind-react
+```
+
+### Use with npx
+
+```bash
+npx @vyeos/css-to-tailwind-react ./src
 ```
 
 ## Quick Start

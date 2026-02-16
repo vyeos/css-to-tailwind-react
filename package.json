@@ -1,6 +1,6 @@
 {
-  "name": "css-to-tailwind-react",
-  "version": "0.4.3",
+  "name": "@vyeos/css-to-tailwind-react",
+  "version": "1.0.0",
   "description": "Convert traditional CSS (inline, internal, and external) into Tailwind CSS utility classes for React-based frameworks",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -18,8 +18,21 @@
   "files": [
     "dist/**/*",
     "bin/**/*",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vyeos/css-to-tailwind-react.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vyeos/css-to-tailwind-react/issues"
+  },
+  "homepage": "https://github.com/vyeos/css-to-tailwind-react#readme",
   "scripts": {
     "build": "tsc && tsc-alias",
     "build:watch": "tsc --watch",
